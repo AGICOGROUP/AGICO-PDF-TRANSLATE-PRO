@@ -1,0 +1,4 @@
+interface:
+  display_name: "Professional PDF Translation"
+  short_description: "Routes native/mixed and scan-only PDFs to separate professional translation workflows"
+  default_prompt: "Use $translate-pdf-professionally-auto to translate my PDF professionally while preserving its layout and graphics."
