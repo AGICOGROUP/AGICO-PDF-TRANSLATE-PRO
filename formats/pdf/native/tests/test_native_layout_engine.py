@@ -64,6 +64,60 @@ def block(
 
 
 class SourceTypographyTests(unittest.TestCase):
+    def test_cjk_text_uses_a_font_with_chinese_glyphs(self):
+        font_path = pipeline.font_file({"bold": False, "italic": False, "cjk": True})
+        self.assertTrue(font_path.lower().endswith(("simsun.ttc", "simsun.ttf")))
+
+    def test_cjk_text_wraps_by_characters_without_inserting_spaces(self):
+        draw = ImageDraw.Draw(Image.new("RGB", (800, 160), "white"))
+        text = "这是一个用于测试中文换行的长句子。"
+        slots = [[0, 0, 90, 16], [0, 18, 90, 34], [0, 36, 90, 52]]
+        _, lines, _ = rebuild.fit_text_to_slots(
+            draw,
+            text,
+            r"C:\Windows\Fonts\simsun.ttc",
+            10 * rebuild.LAYOUT_SCALE,
+            slots,
+            minimum_scale=0.5,
+        )
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(text, "".join(lines))
+
+
+class PageLayoutWrapperTests(unittest.TestCase):
+    def test_full_width_header_body_and_footer_rows_are_unwrapped_together(self):
+        page = {
+            "page": 1,
+            "width": 612.0,
+            "height": 792.0,
+            "table_cells": [
+                {"bbox": [0.0, -7.92, 612.0, 89.27]},
+                {"bbox": [0.0, 89.27, 612.0, 774.81]},
+                {"bbox": [0.0, 774.81, 612.0, 784.08]},
+                {"bbox": [0.0, 784.08, 612.0, 800.18]},
+            ],
+            "blocks": [
+                block("p0001-b0001", "Header", "页眉", [111.0, 36.8, 551.0, 53.1], size=16),
+                block("p0001-b0002", "Body", "正文", [61.7, 113.2, 551.0, 123.2], size=10),
+                block("p0001-b0003", "Footer", "页脚", [75.0, 786.0, 530.0, 796.0], size=9),
+            ],
+        }
+
+        rebuild.unwrap_page_layout_table(page)
+
+        self.assertEqual([], page["table_cells"])
+        self.assertEqual("running-header", page["blocks"][0]["role"])
+        self.assertTrue(page["blocks"][1]["role"].startswith("body-"))
+        self.assertEqual("footer", page["blocks"][2]["role"])
+
+    def test_pipeline_box_text_wraps_cjk_without_spaces(self):
+        draw = ImageDraw.Draw(Image.new("RGB", (800, 160), "white"))
+        text = "这是一个用于测试中文换行的长句子。"
+        font = ImageFont.truetype(r"C:\Windows\Fonts\simsun.ttc", 40)
+        lines = pipeline.wrap_paragraph(draw, text, font, 360)
+        self.assertGreater(len(lines), 1)
+        self.assertEqual(text, "".join(lines))
+
     def test_tiny_protected_page_number_keeps_a_glyph_sized_container(self):
         item = block("p0001-b0007", "1", "1", [548.28, 749.44, 552.78, 758.44], size=9)
         item["characters"] = [{"text": "1", "protected": True}]

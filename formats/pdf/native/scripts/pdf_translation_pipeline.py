@@ -949,6 +949,13 @@ def locate_pdftoppm() -> str:
 def font_file(style: dict[str, Any]) -> str:
     candidates: list[str] = []
     windows = os.environ.get("WINDIR", r"C:\Windows")
+    if style.get("cjk"):
+        if style.get("bold"):
+            # SimHei has a complete CJK bold glyph set on Windows. Some
+            # SimSun bold installations expose only the Latin subset to PIL,
+            # which renders Chinese heading glyphs as tofu squares.
+            candidates.append(os.path.join(windows, "Fonts", "simhei.ttf"))
+        candidates.append(os.path.join(windows, "Fonts", "simsun.ttc"))
     if style.get("bold") and style.get("italic"):
         candidates.append(os.path.join(windows, "Fonts", "arialbi.ttf"))
     elif style.get("bold"):
@@ -1227,6 +1234,36 @@ def background_color(image: Image.Image, box: tuple[int, int, int, int]) -> tupl
 def wrap_paragraph(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, width: int) -> list[str]:
     output: list[str] = []
     for paragraph in text.splitlines() or [""]:
+        if CJK_RE.search(paragraph):
+            tokens: list[str] = []
+            latin = ""
+            for char in paragraph:
+                if char.isspace():
+                    if latin and not latin.endswith(" "):
+                        latin += " "
+                    continue
+                if CJK_RE.fullmatch(char) or char in CJK_PUNCTUATION:
+                    if latin.strip():
+                        tokens.append(latin.strip())
+                    latin = ""
+                    tokens.append(char)
+                else:
+                    latin += char
+            if latin.strip():
+                tokens.append(latin.strip())
+            line = ""
+            for token in tokens:
+                if not line:
+                    line = token
+                    continue
+                candidate = f"{line}{token}" if CJK_RE.fullmatch(token) or token in CJK_PUNCTUATION else f"{line} {token}"
+                if draw.textlength(candidate, font=font) <= width:
+                    line = candidate
+                else:
+                    output.append(line)
+                    line = token
+            output.append(line)
+            continue
         words = paragraph.split()
         if not words:
             output.append("")

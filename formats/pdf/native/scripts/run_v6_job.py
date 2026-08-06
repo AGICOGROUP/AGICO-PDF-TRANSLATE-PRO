@@ -320,6 +320,10 @@ def verify(
     if job["stage"] != "assembled":
         raise ValueError("verify requires assembled stage")
     candidate = _artifact(job, "candidate_pdf")
+    manifest = _artifact(job, "manifest")
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    target_language = str(manifest_data.get("target_language", "")).casefold()
+    target_allows_cjk = target_language.startswith(("zh", "ja", "ko"))
     reader = PdfReader(str(candidate))
     extracted_text = "\n".join(
         page.extract_text() or "" for page in reader.pages
@@ -327,7 +331,7 @@ def verify(
     cjk = re.findall(
         r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", extracted_text
     )
-    if cjk:
+    if cjk and not target_allows_cjk:
         raise ValueError(f"extractable CJK remains: {len(cjk)} characters")
     if visual_review_report is None:
         raise ValueError("visual review report is required")
@@ -362,7 +366,6 @@ def verify(
         raise ValueError(
             "visual delivery gates failed: " + ", ".join(failed)
         )
-    manifest = _artifact(job, "manifest")
     selectability_report = job_dir / "selectability-report.json"
     selectable_args: list[object] = [
         Path(job["source"]["path"]), manifest, candidate, "--report", selectability_report,

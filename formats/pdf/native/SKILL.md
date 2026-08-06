@@ -58,8 +58,9 @@ Deliver only when every applicable gate passes:
    except a strictly proven complete bilingual image preserved unchanged.
 2. Source-selectable text remains selectable/copyable; native pages are not
    flattened.
-3. Page count, boxes, rotation, colors, tables, images, and hierarchy match the
-   source; layout changes are limited to approved fit-failure image adjustments.
+3. Preserve the source page count, boxes, rotation, colors, tables, images,
+   reading order, and visual identity. Allow source-respecting micro-adjustments
+   to text layout when they make the translation clearer or more balanced.
 4. Outside approved image-text regions, source and cleaned-image pixels are
    identical.
 5. Protected engineering lines, arrows, borders, symbols, and equipment pixels
@@ -181,6 +182,12 @@ python scripts/native_selectable_rebuild.py `
 - Reflow complete paragraphs, not independently extracted lines. Preserve
   source alignment, keep one font size across each paragraph, and harmonize
   equal body roles on the same page.
+- Treat source layout as the baseline, not a coordinate prison. Apply controlled
+  local changes to alignment, indentation, line spacing, paragraph spacing,
+  text-box width, and role-consistent font size when the translated page reads
+  better without changing its identity. Restore table-of-contents hierarchy,
+  split run-in lists into separate items, and recombine orphaned continuation
+  lines when the source semantics support those changes.
 - Plan dense pages as a whole before shrinking text. Set one body-size target
   and one target for each heading level. Only after a recorded fit failure,
   reclaim verified whitespace by shifting or proportionally shrinking an image

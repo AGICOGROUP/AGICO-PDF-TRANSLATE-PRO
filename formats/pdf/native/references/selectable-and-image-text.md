@@ -112,6 +112,14 @@ review when same-level headings differ by more than 0.5 pt, body prose differs
 by more than 0.5 pt outside tables/captions, or prose falls below its preferred
 size while an image or vertical region leaves reclaimable whitespace.
 
+Preserve the source composition as the default. Permit small, local corrections
+when translation length or extraction artifacts weaken readability: clarify
+heading and table-of-contents hierarchy, align related parameter lines, split
+run-in enumerations into vertical lists, merge orphaned continuation lines, and
+rebalance nearby whitespace. Keep these edits within the original content
+region and preserve page identity, reading order, protected graphics, tables,
+images, headers, and footers.
+
 Use this order:
 
 1. Choose one body-size target for the page and one bold size target for each
