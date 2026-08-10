@@ -23,7 +23,7 @@ MANUAL_TABLE_BLOCK_RANGES: dict[int, tuple[int, int]] = {}
 MANUAL_BLOCK_IDS: set[str] = set()
 DEFAULT_PIPELINE = Path(__file__).with_name("pdf_translation_pipeline.py")
 LIST_ITEM_START_RE = re.compile(
-    r"^\s*(?:[-\u2013\u2014\u2022\u00b7]|[\(\[]?\d{1,2}(?:[\)\],]|\.(?!\d)|\u3001)|[IVXLC]+\.)\s*",
+    r"^\s*(?:[-\u2013\u2014\u2022\u00b7]|[\(\[\uff08]?\d{1,2}(?:[\)\]\uff09,\uff0c]|\.(?!\d)|\u3001)|[IVXLC]+\.)\s*",
     re.IGNORECASE,
 )
 TOC_ITEM_START_RE = re.compile(r"^\s*\d{1,2}(?:\.\d{1,2})+\s*.*\.{5,}\d+\s*$")
@@ -258,6 +258,27 @@ def resolve_text_container(
         left, right = max(content_left, line_box[0]), content_right
 
     line_top, line_bottom = line_box[1], line_box[3]
+    if role.startswith("heading-"):
+        for raw_image in page_info.get("image_boxes", []):
+            image = [float(value) for value in raw_image]
+            image_width = image[2] - image[0]
+            image_height = image[3] - image[1]
+            if image_width > width * 0.78 or image_height > float(page_info["height"]) * 0.78:
+                continue
+            if image[0] <= left + 10 or line_bottom <= image[1] - 2 or line_top >= image[3] + 2:
+                continue
+            previous_bottoms = [
+                float(other["bbox"][3])
+                for other in page_info.get("blocks", [])
+                if str(other.get("id", "")) != str(block.get("id", ""))
+                and float(other["bbox"][3]) <= line_top
+                and str(other.get("role", "")) not in {"running-header", "footer"}
+            ]
+            safe_bottom = image[1] - 2
+            previous_bottom = max(previous_bottoms, default=line_top - 2)
+            safe_top = max(previous_bottom + 2, safe_bottom - size * 1.05)
+            if safe_bottom - safe_top >= size * 0.9:
+                return [left, safe_top, max(left + 2, right), safe_bottom]
     vertical_mid = (line_top + line_bottom) / 2
     for raw_image in (
         page_info.get("image_boxes", []) if role.startswith("body-") else []
@@ -290,9 +311,12 @@ def _font_family_key(block: dict[str, Any]) -> str:
 
 
 def _flow_compatible(previous: dict[str, Any], current: dict[str, Any]) -> bool:
-    if not str(previous.get("role", "")).startswith("body-"):
+    heading_join = str(current.get("heading_continuation_of", "")) == str(
+        previous.get("id", "")
+    )
+    if not heading_join and not str(previous.get("role", "")).startswith("body-"):
         return False
-    if not str(current.get("role", "")).startswith("body-"):
+    if not heading_join and not str(current.get("role", "")).startswith("body-"):
         return False
     if previous.get("manual_table_parts") is not None or current.get("manual_table_parts") is not None:
         return False
@@ -313,13 +337,14 @@ def _flow_compatible(previous: dict[str, Any], current: dict[str, Any]) -> bool:
         current.get("reviewed_flow_group", "")
     ).strip()
     current_source = str(current.get("source_text", ""))
-    if not reviewed_join and (
+    if not reviewed_join and not heading_join and (
         LIST_ITEM_START_RE.match(current_source) or TOC_ITEM_START_RE.match(current_source)
     ):
         return False
     previous_source = str(previous.get("source_text", "")).strip()
     if (
         not reviewed_join
+        and not heading_join
         and
         PARAGRAPH_END_RE.search(previous_source)
         and not previous_source.endswith((";", "\uff1b"))
@@ -370,6 +395,11 @@ def apply_reviewed_text_region_adjustments(pages: list[dict[str, Any]]) -> None:
 def group_paragraph_flows(page_info: dict[str, Any]) -> list[dict[str, Any]]:
     all_blocks = page_info.get("blocks", [])
     block_positions = {block["id"]: index for index, block in enumerate(all_blocks)}
+    heading_roots = {
+        str(block.get("heading_continuation_of", ""))
+        for block in all_blocks
+        if block.get("heading_continuation_of")
+    }
     groups: list[list[dict[str, Any]]] = []
     for block in all_blocks:
         if block.get("render_suppressed"):
@@ -379,7 +409,11 @@ def group_paragraph_flows(page_info: dict[str, Any]) -> list[dict[str, Any]]:
             # must stay line-addressable instead of being collapsed into a
             # shorter paragraph flow when Chinese needs fewer wrapped lines.
             continue
-        if not str(block.get("role", "")).startswith("body-"):
+        is_body = str(block.get("role", "")).startswith("body-")
+        is_heading_flow = bool(block.get("heading_continuation_of")) or str(
+            block.get("id", "")
+        ) in heading_roots
+        if not is_body and not is_heading_flow:
             continue
         if infer_block_alignment(block, float(page_info["width"])) == "center":
             continue
@@ -1581,7 +1615,7 @@ def make_overlay(
                 for item in items:
                     if not str(item.get("text", "")).strip():
                         continue
-                    top = float(item.get("top", line["bbox"][1]))
+                    top = float(item.get("top", container_top))
                     bottom = float(
                         item.get(
                             "bottom",
