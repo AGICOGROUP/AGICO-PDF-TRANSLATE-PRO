@@ -12,10 +12,21 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_scan import apply_page_typography_policy, build_pdf, typography_group
+from build_scan import (
+    CJK_REGULAR_FONT,
+    LATIN_REGULAR_FONT,
+    apply_page_typography_policy,
+    build_pdf,
+    font_for_text,
+    typography_group,
+)
 
 
 class PageTypographyPolicyTests(unittest.TestCase):
+    def test_font_selection_uses_latin_for_english_and_cjk_for_chinese(self) -> None:
+        self.assertEqual(font_for_text("Translated body text", bold=False), LATIN_REGULAR_FONT)
+        self.assertEqual(font_for_text("中文译文", bold=False), CJK_REGULAR_FONT)
+
     def test_role_groups_are_stable(self) -> None:
         self.assertEqual(typography_group("title"), "major_title")
         self.assertEqual(typography_group("subheading"), "minor_title")

@@ -186,11 +186,38 @@ def validate_manifest(manifest: dict) -> dict:
     }
 
 
+def _is_cjk_text(text: str) -> bool:
+    """Detect if text contains CJK characters that need character-level wrapping."""
+    for ch in text:
+        if '\u4e00' <= ch <= '\u9fff' or '\u3000' <= ch <= '\u303f':
+            return True
+    return False
+
+
 def _wrap_paragraph(text: str, font_name: str, font_size: float, width: float) -> list[str]:
+    # For CJK text (Chinese, Japanese, Korean), wrap by character since
+    # these languages do not use spaces between words
+    if _is_cjk_text(text):
+        lines: list[str] = []
+        current = ""
+        for ch in text:
+            candidate = current + ch
+            if stringWidth(candidate, font_name, font_size) > width:
+                if not current:
+                    raise TextOverflowError(f"unbreakable token exceeds width: {ch!r}")
+                lines.append(current)
+                current = ch
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        return lines if lines else [""]
+
+    # Latin text: wrap by words
     words = text.split()
     if not words:
         return [""]
-    lines: list[str] = []
+    lines = []
     current = words[0]
     if stringWidth(current, font_name, font_size) > width:
         raise TextOverflowError(f"unbreakable token exceeds width: {current!r}")
