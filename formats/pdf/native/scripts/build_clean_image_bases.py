@@ -272,6 +272,11 @@ def clean_region(image: np.ndarray, region: dict) -> int:
         mask = colored_mask(source_crop, "cyan", True)
     elif mode in {"text_only_area", "cyan_glyph", "white_text_area"}:
         mask = np.ones(source_crop.shape[:2], dtype=bool)
+    elif mode == "solid_fill":
+        fill = np.asarray(region["fill_rgb"], dtype=np.uint8)
+        if fill.shape != (3,):
+            raise ValueError("solid_fill requires a three-channel fill_rgb")
+        mask = np.ones(source_crop.shape[:2], dtype=bool)
     elif mode == "ui_glyph":
         mask, fill = ui_glyph_mask(source_crop)
     elif mode == "ui_text_patch":
@@ -285,7 +290,7 @@ def clean_region(image: np.ndarray, region: dict) -> int:
         raise ValueError(f"Unsupported cleanup mode: {mode}")
     target = image[y0:y1, x0:x1]
     before = target.copy()
-    target[mask] = fill if mode == "ui_glyph" else background_color(source_crop)
+    target[mask] = fill if mode in {"ui_glyph", "solid_fill"} else background_color(source_crop)
     if mode == "anchored_line_restore":
         region["_restored_segments"] = restore_anchored_lines(
             image, region, (x0, y0, x1, y1), source_for_restore

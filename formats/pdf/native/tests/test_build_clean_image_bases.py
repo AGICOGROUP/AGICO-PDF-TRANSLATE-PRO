@@ -100,6 +100,30 @@ class UiTextPatchTests(unittest.TestCase):
         self.assertTrue(np.array_equal(image[mask], original_outside[mask]))
 
 
+class SolidFillCleanupTests(unittest.TestCase):
+    def test_replaces_only_the_approved_caption_band_with_explicit_color(self):
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        for y in range(image.shape[0]):
+            image[y, :, :] = [20 + y, 40 + y, 70 + y]
+        outside = image.copy()
+
+        changed = MODULE.clean_region(
+            image,
+            {
+                "box": [4, 11, 26, 18],
+                "clean_box": [4, 11, 26, 18],
+                "mode": "solid_fill",
+                "fill_rgb": [24, 30, 48],
+            },
+        )
+
+        self.assertGreater(changed, 0)
+        self.assertTrue(np.all(image[11:18, 4:26] == [24, 30, 48]))
+        mask = np.ones(image.shape[:2], dtype=bool)
+        mask[11:18, 4:26] = False
+        self.assertTrue(np.array_equal(image[mask], outside[mask]))
+
+
 class AnchoredLineRestoreTests(unittest.TestCase):
     def test_reconnects_horizontal_line_between_opposite_anchors(self):
         image = np.full((24, 30, 3), 255, dtype=np.uint8)
