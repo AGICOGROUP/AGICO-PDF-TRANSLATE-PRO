@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ContentStream, DictionaryObject, NameObject
+from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, NameObject
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -28,6 +28,10 @@ LIST_ITEM_START_RE = re.compile(
 )
 TOC_ITEM_START_RE = re.compile(r"^\s*\d{1,2}(?:\.\d{1,2})+\s*.*\.{5,}\d+\s*$")
 DOT_LEADER_TEXT_RE = re.compile(r"^(.*?)(\.{5,})(\d+)\s*$", re.S)
+SECTION_HEADING_RE = re.compile(
+    r"^\s*(\d+(?:[.．]\d+)*)\s*(?:[、:：]|[.．]\s+|\s+)"
+)
+CLAUSE_PUNCTUATION_RE = re.compile(r"[，,；;。！？!?]")
 CJK_CHAR_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 CJK_ATTACH_PUNCTUATION = set("，。；：！？、（）【】《》“”‘’—－…")
 
@@ -41,6 +45,60 @@ def typography_group(role: str) -> str:
     if value.startswith("body-") or value in {"body", "list_item", "warning_body"}:
         return "body"
     return "special"
+
+
+def section_heading_depth(text: str) -> int | None:
+    """Return the numbered section depth without mistaking measurements for headings."""
+    match = SECTION_HEADING_RE.match(str(text or ""))
+    if not match:
+        return None
+    return len(re.split(r"[.．]", match.group(1)))
+
+
+def likely_heading_text(text: str, style: dict[str, Any]) -> bool:
+    if section_heading_depth(text) is not None:
+        return True
+    value = str(text or "").strip()
+    return (
+        bool(style.get("bold") or style.get("source_bold"))
+        and 0 < len(value) <= 60
+        and not CLAUSE_PUNCTUATION_RE.search(value)
+    )
+
+
+def promote_wrapped_heading_continuations(page_info: dict[str, Any]) -> list[str]:
+    """Keep a short lowercase continuation with the preceding numbered heading."""
+    blocks = sorted(
+        (block for block in page_info.get("blocks", []) if not block.get("render_suppressed")),
+        key=lambda block: (float(block["bbox"][1]), float(block["bbox"][0])),
+    )
+    promoted: list[str] = []
+    for previous, current in zip(blocks, blocks[1:]):
+        previous_role = str(previous.get("role", ""))
+        if not previous_role.startswith("heading-") or not str(current.get("role", "")).startswith("body-"):
+            continue
+        previous_box = [float(value) for value in previous.get("bbox", [])]
+        current_box = [float(value) for value in current.get("bbox", [])]
+        if len(previous_box) != 4 or len(current_box) != 4:
+            continue
+        line_height = max(1.0, previous_box[3] - previous_box[1])
+        if current_box[1] - previous_box[1] > line_height * 2.2:
+            continue
+        source_text = str(current.get("source_text", "")).strip()
+        translation = str(current.get("translation", "")).strip()
+        explicit_continuation = current.get("heading_continuation") is True
+        if len(source_text) > 24 or (
+            not explicit_continuation and not re.match(r"^[a-z]", translation)
+        ):
+            continue
+        if LIST_ITEM_START_RE.match(source_text):
+            continue
+        current["role"] = previous_role
+        current.setdefault("style", {})["bold"] = True
+        current["source_bold_override"] = True
+        current["force_flow_break"] = True
+        promoted.append(str(current.get("id", "")))
+    return promoted
 
 
 def _median(values: list[float]) -> float:
@@ -1022,7 +1080,17 @@ def strip_text_stream(stream_object, pdf) -> int:
         if operator not in TEXT_SHOW_OPERATORS
     ]
     removed = original_count - len(content.operations)
-    stream_object.set_data(content.get_data())
+    rewritten_data = content.get_data()
+    filters = stream_object.get("/Filter")
+    if filters in (None, "/FlateDecode", ["/FlateDecode"]):
+        stream_object.set_data(rewritten_data)
+    else:
+        # pypdf cannot re-encode streams that use filter chains such as
+        # ASCII85Decode + FlateDecode. Normalize the rewritten stream to the
+        # supported FlateDecode representation before writing it back.
+        stream_object[NameObject("/Filter")] = NameObject("/FlateDecode")
+        stream_object.pop(NameObject("/DecodeParms"), None)
+        stream_object.set_data(rewritten_data)
     return removed
 
 
@@ -1059,7 +1127,12 @@ def strip_native_text(source: Path) -> tuple[PdfWriter, int]:
     for page in writer.pages:
         contents = page.get("/Contents")
         if contents:
-            removed += strip_text_stream(contents.get_object(), writer)
+            contents_object = contents.get_object()
+            if isinstance(contents_object, ArrayObject):
+                for stream_reference in contents_object:
+                    removed += strip_text_stream(stream_reference.get_object(), writer)
+            else:
+                removed += strip_text_stream(contents_object, writer)
         removed += strip_form_text(page.get("/Resources"), writer, visited)
     return writer, removed
 
@@ -1163,17 +1236,24 @@ def unwrap_page_layout_table(page_info: dict[str, Any]) -> None:
             block["role"] = "running-header"
         elif top >= body_bottom - 1:
             block["role"] = "footer"
-        elif bool(style.get("bold")) or bool(style.get("source_bold")):
-            block["role"] = "heading-" + str(style.get("role_size", style.get("size", 10)))
         else:
-            block["role"] = "body-" + str(style.get("role_size", style.get("size", 10)))
-            # Bullet glyphs are vector marks that remain at their source
-            # coordinates. Keep each indented bullet in its own flow so a
-            # shorter Chinese translation cannot consume the next bullet's
-            # line slots.
-            if float(bbox[0]) > 70.0:
-                block["force_flow_break"] = True
-                block["force_line_mode"] = True
+            depth = section_heading_depth(str(block.get("source_text", "")))
+            if likely_heading_text(str(block.get("source_text", "")), style):
+                level = depth if depth is not None else 2
+                block["role"] = (
+                    f"heading-{level}-"
+                    + str(style.get("role_size", style.get("size", 10)))
+                )
+            else:
+                block["role"] = "body-" + str(style.get("role_size", style.get("size", 10)))
+                # Bullet glyphs are vector marks that remain at their source
+                # coordinates. Keep each indented bullet in its own flow so a
+                # shorter Chinese translation cannot consume the next bullet's
+                # line slots.
+                if float(bbox[0]) > 70.0:
+                    block["force_flow_break"] = True
+                    block["force_line_mode"] = True
+    promote_wrapped_heading_continuations(page_info)
 
 
 def draw_fitted_text(

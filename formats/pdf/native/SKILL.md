@@ -175,6 +175,9 @@ python scripts/native_selectable_rebuild.py `
 - Classify body/heading/table roles from source font family, weight, position,
   and reading-text-weighted size frequency. Do not promote body copy merely
   because its absolute point size is large.
+- Derive numbered heading levels from the full section prefix; do not treat
+  decimal measurements or punctuated prose as headings. Keep short wrapped
+  heading continuations at the same level and translate them as one heading.
 - Keep structural role independent from font weight. Derive each page group's
   weight from the dominant source evidence. When a PDF exports visually bold
   text without a bold font flag, record a reviewed `source_bold_override`;
@@ -217,6 +220,9 @@ and select `native_edit`, `deterministic_cleanup`, `anchored_line_restore`,
 text-bearing image.
 Record every label, OCR confidence, translation, route, and status. Do not
 guess unreadable labels; preserve them and create a `[CONFIRM]` item.
+Never use `[CONFIRM]` to skip a clear informational caption or readable label
+because its background is complex; route it through a local clean base and
+selectable vector-text overlay.
 
 Use two separate layers:
 

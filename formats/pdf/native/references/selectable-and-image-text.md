@@ -101,6 +101,11 @@ Use these invariants:
     remain one flow.
 11. Preserve header/footer source size and verified visual weight. Replacement
     font metrics may require a taller container, not a smaller font.
+12. Derive numbered heading depth from the complete prefix: `4、` is level 1,
+    `4.1、` is level 2, and `4.1.2` is level 3. A bold decimal measurement or
+    sentence with clause punctuation remains body text. If a wrapped heading
+    ends in one source block and the next short line continues it, keep both
+    lines in the same heading level and translate them as one logical heading.
 
 These are source-level rules. Do not fix the same failures with page IDs,
 coordinate patches, or document-specific block suppressions.

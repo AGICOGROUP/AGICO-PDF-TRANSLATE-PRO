@@ -13,20 +13,13 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from contracts import TextOverflowError, _is_cjk_text, fit_text, validate_manifest
+from contracts import TextOverflowError, fit_text, validate_manifest
 
 
-LATIN_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\arial.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
-LATIN_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\arialbd.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
-CJK_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\simhei.ttf"), Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")]
-CJK_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\simhei.ttf"), Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc")]
-LATIN_REGULAR_FONT = "ScanTranslation-Latin-Regular"
-LATIN_BOLD_FONT = "ScanTranslation-Latin-Bold"
-CJK_REGULAR_FONT = "ScanTranslation-CJK-Regular"
-CJK_BOLD_FONT = "ScanTranslation-CJK-Bold"
-# Backward-compatible aliases for callers that expect the original names.
-REGULAR_FONT = LATIN_REGULAR_FONT
-BOLD_FONT = LATIN_BOLD_FONT
+REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\arial.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
+BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\arialbd.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
+REGULAR_FONT = "ScanTranslation-Regular"
+BOLD_FONT = "ScanTranslation-Bold"
 ROLE_DEFAULTS = {
     "title": (18, 11), "subtitle": (15, 10), "heading": (16, 10),
     "subheading": (14, 9), "body": (10, 6), "list_item": (10, 6),
@@ -52,12 +45,6 @@ def _median(values: list[float]) -> float:
     return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def font_for_text(text: str, bold: bool) -> str:
-    if _is_cjk_text(text):
-        return CJK_BOLD_FONT if bold else CJK_REGULAR_FONT
-    return LATIN_BOLD_FONT if bold else LATIN_REGULAR_FONT
-
-
 def apply_page_typography_policy(blocks: list[dict]) -> dict[str, dict]:
     grouped: dict[str, list[dict]] = {}
     for block in blocks:
@@ -72,13 +59,10 @@ def apply_page_typography_policy(blocks: list[dict]) -> dict[str, dict]:
         target_size = _median(sizes)
         bold_votes = sum(bool(member.get("bold", False)) for member in members)
         target_bold = bold_votes >= len(members) / 2 if group != "body" else bold_votes > len(members) / 2
-        group_text = " ".join(str(member.get("translation", "")) for member in members)
-        group_font = font_for_text(group_text, target_bold)
         for member in members:
             member["max_font"] = target_size
             member["bold"] = target_bold
-            member["_font_name"] = group_font
-        evidence[group] = {"font_name": group_font, "font_size": target_size, "bold": target_bold, "block_ids": [member.get("id", "") for member in members]}
+        evidence[group] = {"font_name": BOLD_FONT if target_bold else REGULAR_FONT, "font_size": target_size, "bold": target_bold, "block_ids": [member.get("id", "") for member in members]}
     return evidence
 
 
@@ -90,16 +74,9 @@ def _first_existing(paths: list[Path]) -> Path:
 
 
 def register_fonts() -> None:
-    registrations = (
-        (LATIN_REGULAR_FONT, LATIN_REGULAR_FONT_PATHS),
-        (LATIN_BOLD_FONT, LATIN_BOLD_FONT_PATHS),
-        (CJK_REGULAR_FONT, CJK_REGULAR_FONT_PATHS),
-        (CJK_BOLD_FONT, CJK_BOLD_FONT_PATHS),
-    )
-    registered = set(pdfmetrics.getRegisteredFontNames())
-    for name, paths in registrations:
-        if name not in registered:
-            pdfmetrics.registerFont(TTFont(name, str(_first_existing(paths))))
+    if REGULAR_FONT not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont(REGULAR_FONT, str(_first_existing(REGULAR_FONT_PATHS))))
+        pdfmetrics.registerFont(TTFont(BOLD_FONT, str(_first_existing(BOLD_FONT_PATHS))))
 
 
 def _clamp_box(box: list[float], width: int, height: int) -> tuple[int, int, int, int]:
@@ -189,7 +166,7 @@ def _draw_block(pdf: canvas.Canvas, block: dict, page: dict) -> dict:
     box_width, box_height = max(0.1, right - left - 2), max(0.1, top - bottom - 2)
     width, height = (box_height, box_width) if angle in {90, 270} else (box_width, box_height)
     default_max, default_min = ROLE_DEFAULTS.get(block["role"], (9, 6))
-    font_name = str(block.get("_font_name") or font_for_text(block["translation"], bool(block.get("bold"))))
+    font_name = BOLD_FONT if block.get("bold") else REGULAR_FONT
     try:
         fitted = fit_text(
             block["translation"], font_name,
@@ -242,7 +219,7 @@ def _fit_rich_lines(block: dict, page: dict, width: float, height: float) -> tup
             line_height = font_size * leading_ratio
             for run in runs:
                 if run["type"] == "text":
-                    font_name = font_for_text(run["text"], bool(run.get("bold", block.get("bold", False))))
+                    font_name = BOLD_FONT if run.get("bold", block.get("bold", False)) else REGULAR_FONT
                     run_width = pdfmetrics.stringWidth(run["text"], font_name, font_size)
                     measured = {**run, "width_pt": run_width, "height_pt": font_size, "font_name": font_name}
                 else:
@@ -379,7 +356,7 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
                 fitted_size, _, _ = _fit_rich_lines(block, page, width, height)
             else:
                 default_max, default_min = ROLE_DEFAULTS.get(block["role"], (9, 6))
-                font_name = str(block.get("_font_name") or font_for_text(block["translation"], bool(block.get("bold"))))
+                font_name = BOLD_FONT if block.get("bold") else REGULAR_FONT
                 fitted_size = fit_text(
                     block["translation"], font_name,
                     float(block.get("max_font", default_max)),

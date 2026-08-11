@@ -321,6 +321,36 @@ class RunV6JobTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unreported confirm item", result.stderr)
 
+    def test_image_annotation_rejects_clear_informational_caption_as_confirm(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            job_dir, image_id = prepare_annotation_job(root)
+            metadata = root / "metadata.json"
+            review = root / "review.json"
+            metadata.write_text(json.dumps({"images": []}), encoding="utf-8")
+            payload = routed_review(image_id, "preserve_confirm")
+            image = payload["images"][0]
+            image["translated_label_count"] = 0
+            image["preserved_label_count"] = 1
+            image["confirm_count"] = 1
+            image["labels"][0].update(
+                {
+                    "source_text": "厂区效果图下方清晰可读的企业基地说明文字",
+                    "translation": "",
+                    "status": "confirm",
+                    "preserve_reason": "informational_caption",
+                }
+            )
+            payload["confirm_items"] = [{"label_id": "label-1"}]
+            review.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            result = run(
+                "annotate-images", job_dir, "--metadata", metadata, "--review", review
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("informational image text must be translated", result.stderr)
+
     def test_verify_requires_image_structural_evidence(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

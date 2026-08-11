@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader
+from reportlab.pdfgen import canvas
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +26,29 @@ def load_module(name: str, filename: str):
 
 rebuild = load_module("native_selectable_rebuild", "native_selectable_rebuild.py")
 pipeline = load_module("pdf_translation_pipeline_layout", "pdf_translation_pipeline.py")
+
+
+class NativeTextStreamTests(unittest.TestCase):
+    def test_strip_native_text_handles_ascii85_flate_content_streams(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "ascii85-source.pdf"
+            pdf = canvas.Canvas(str(source))
+            pdf.drawString(72, 720, "Source text")
+            pdf.save()
+
+            source_reader = PdfReader(str(source))
+            self.assertEqual(
+                source_reader.pages[0]["/Contents"].get_object()["/Filter"],
+                ["/ASCII85Decode", "/FlateDecode"],
+            )
+
+            writer, removed = rebuild.strip_native_text(source)
+            output = Path(temp_dir) / "stripped.pdf"
+            with output.open("wb") as stream:
+                writer.write(stream)
+
+            self.assertGreater(removed, 0)
+            self.assertNotIn("Source text", PdfReader(str(output)).pages[0].extract_text())
 
 
 def require(module, name: str):
@@ -175,31 +201,11 @@ class PageLayoutWrapperTests(unittest.TestCase):
         self.assertGreater(container[2], 500)
 
     def test_heading_crossing_image_moves_into_safe_band_above_image(self):
-        section = block(
-            "p0001-b0009",
-            "4. Electrical Control",
-            "4. Electrical Control",
-            [90, 298, 259, 314],
-            size=16,
-        )
+        section = block("p0001-b0009", "4. Electrical Control", "4. Electrical Control", [90, 298, 259, 314], size=16)
         section["role"] = "heading-1-16"
-        heading = block(
-            "p0001-b0010",
-            "4.1 Standard centralized control system",
-            "4.1 Standard Centralized Control System",
-            [122, 329, 285, 346],
-            size=16,
-        )
+        heading = block("p0001-b0010", "4.1 Standard centralized control system", "4.1 Standard Centralized Control System", [122, 329, 285, 346], size=16)
         heading["role"] = "heading-2-16"
-        page = {
-            "page": 1,
-            "width": 595.3,
-            "height": 841.9,
-            "content_bounds": [90, 505],
-            "table_cells": [],
-            "image_boxes": [[294, 340, 540, 477]],
-            "blocks": [section, heading],
-        }
+        page = {"page": 1, "width": 595.3, "height": 841.9, "content_bounds": [90, 505], "table_cells": [], "image_boxes": [[294, 340, 540, 477]], "blocks": [section, heading]}
         container = rebuild.resolve_text_container(page, heading, heading["lines"][0])
         self.assertGreater(container[2], 500)
         self.assertGreaterEqual(container[1], 316)
@@ -278,56 +284,18 @@ class PageLayoutWrapperTests(unittest.TestCase):
 
     def test_decimal_measurement_with_unit_is_not_promoted_to_heading(self):
         classify = require(pipeline, "classify_document_roles")
-        measurement = block(
-            "p0001-b0001",
-            "0.5mm color-coated steel sheet retains heat",
-            "0.5 mm color-coated steel sheet retains heat",
-            [90, 267, 422, 283],
-            size=16,
-        )
-        page = {
-            "page": 1,
-            "width": 595.3,
-            "height": 841.9,
-            "table_cells": [],
-            "blocks": [measurement],
-        }
+        measurement = block("p0001-b0001", "0.5mm color-coated steel sheet retains heat", "0.5 mm color-coated steel sheet retains heat", [90, 267, 422, 283], size=16)
+        page = {"page": 1, "width": 595.3, "height": 841.9, "table_cells": [], "blocks": [measurement]}
         classify([page])
         self.assertTrue(measurement["role"].startswith("body-"))
         self.assertFalse(measurement["style"]["bold"])
 
     def test_short_line_before_numbered_list_continues_wrapped_heading(self):
         classify = require(pipeline, "classify_document_roles")
-        heading = block(
-            "p0001-b0001",
-            "4.2 PLC automatic control sys",
-            "4.2 PLC Automatic Control",
-            [122, 485, 285, 502],
-            size=16,
-        )
-        continuation = block(
-            "p0001-b0002",
-            "tem (optional)",
-            "System (Optional)",
-            [90, 517, 202, 533],
-            size=16,
-        )
-        item = block(
-            "p0001-b0003",
-            "1）power supply and distribution",
-            "1) Power Supply and Distribution System",
-            [122, 548, 274, 564],
-            size=16,
-        )
-        page = {
-            "page": 1,
-            "width": 595.3,
-            "height": 841.9,
-            "content_bounds": [90, 505],
-            "table_cells": [],
-            "image_boxes": [],
-            "blocks": [heading, continuation, item],
-        }
+        heading = block("p0001-b0001", "4.2 PLC automatic control sys", "4.2 PLC Automatic Control", [122, 485, 285, 502], size=16)
+        continuation = block("p0001-b0002", "tem (optional)", "System (Optional)", [90, 517, 202, 533], size=16)
+        item = block("p0001-b0003", "1）power supply and distribution", "1) Power Supply and Distribution System", [122, 548, 274, 564], size=16)
+        page = {"page": 1, "width": 595.3, "height": 841.9, "content_bounds": [90, 505], "table_cells": [], "image_boxes": [], "blocks": [heading, continuation, item]}
         classify([page])
         flows = require(rebuild, "group_paragraph_flows")(page)
         heading_flow = next(flow for flow in flows if heading["id"] in flow["block_ids"])
@@ -560,40 +528,16 @@ class ParagraphFlowTests(unittest.TestCase):
 
     def test_fullwidth_parenthesized_number_starts_a_new_paragraph_flow(self):
         group = require(rebuild, "group_paragraph_flows")
-        intro = block(
-            "p0001-b0001", "optional system", "System (Optional)", [90, 100, 250, 116]
-        )
-        item = block(
-            "p0001-b0002", "1）power supply", "1) Power Supply", [122, 131, 505, 147]
-        )
-        page = {
-            "page": 1,
-            "width": 595.3,
-            "height": 841.9,
-            "table_cells": [],
-            "image_boxes": [],
-            "content_bounds": [90, 505],
-            "blocks": [intro, item],
-        }
+        intro = block("p0001-b0001", "optional system", "System (Optional)", [90, 100, 250, 116])
+        item = block("p0001-b0002", "1）power supply", "1) Power Supply", [122, 131, 505, 147])
+        page = {"page": 1, "width": 595.3, "height": 841.9, "table_cells": [], "image_boxes": [], "content_bounds": [90, 505], "blocks": [intro, item]}
         self.assertEqual(2, len(group(page)))
 
     def test_fullwidth_nested_number_starts_a_new_paragraph_flow(self):
         group = require(rebuild, "group_paragraph_flows")
-        parent = block(
-            "p0001-b0001", "3）distribution system", "3) Distribution System", [122, 100, 250, 116]
-        )
-        nested = block(
-            "p0001-b0002", "（1）、power supply voltage", "(1) Power supply voltage", [122, 131, 505, 147]
-        )
-        page = {
-            "page": 1,
-            "width": 595.3,
-            "height": 841.9,
-            "table_cells": [],
-            "image_boxes": [],
-            "content_bounds": [90, 505],
-            "blocks": [parent, nested],
-        }
+        parent = block("p0001-b0001", "3）distribution system", "3) Distribution System", [122, 100, 250, 116])
+        nested = block("p0001-b0002", "（1）、power supply voltage", "(1) Power supply voltage", [122, 131, 505, 147])
+        page = {"page": 1, "width": 595.3, "height": 841.9, "table_cells": [], "image_boxes": [], "content_bounds": [90, 505], "blocks": [parent, nested]}
         self.assertEqual(2, len(group(page)))
 
     def test_hierarchical_toc_entry_starts_a_new_paragraph_flow(self):
