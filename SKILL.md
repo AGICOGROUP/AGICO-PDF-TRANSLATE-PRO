@@ -1,19 +1,18 @@
 ---
-name: translate-pdf-professionally-auto
-description: Use when professionally translating any PDF while preserving layout, selectable text, image text, graphics, tables, colors, and engineering structure. Automatically routes native/mixed PDFs and scan-only/image-only PDFs to separate specialized workflows. Also supports bilingual overlay mode that keeps the original text visible and adds Chinese translation beside it.
+name: translate-documents-and-images-professionally
+description: Use when professionally translating native-text PDFs, scan-only/image-only PDFs, or static PNG and JPEG images while preserving layout, text, graphics, tables, colors, and engineering structure. Routes each input to one specialized workflow and supports bilingual PDF overlay mode.
 ---
 
-# Professional PDF Translation Router
+# Professional Document and Image Translation Router
 
-This repository supports PDF files only.
+This repository supports PDF, PNG, JPG, and JPEG inputs.
 
-Read `formats/pdf/SKILL.md` completely, classify the uploaded PDF with its router, and invoke exactly one returned adapter:
+Choose exactly one adapter from the actual file format:
 
-- Native-text or mixed native/raster PDF (replace source text with translation): `formats/pdf/native/SKILL.md`
-- Scan-only or image-only PDF (replace page-image text with translation): `formats/pdf/scan/SKILL.md`
-- Bilingual overlay (keep source text, add Chinese translation beside it): `formats/pdf/bilingual/SKILL.md`
+- PDF: read `formats/pdf/SKILL.md` completely and use its content-based router.
+- Static PNG or JPEG image: read and follow `formats/image/SKILL.md`.
 
-Never merge adapter workflows and never route by filename or user wording alone.
+Reject unsupported formats, animated images, and multi-page image containers. Never merge adapter workflows. File format selects the top-level adapter; PDF content inspection selects the PDF sub-adapter.
 
 **Replacement vs. bilingual overlay:** The native and scan adapters replace
 source text with translation — the final document contains only the target
