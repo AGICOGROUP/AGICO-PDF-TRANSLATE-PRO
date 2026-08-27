@@ -5,6 +5,16 @@ description: Use when translating native-text or mixed native/raster technical P
 
 # Professional PDF translation
 
+## Engineering-drawing route override
+
+Before using replacement mode, run the PDF router. If it reports
+`document_kind: engineering-drawing`, do not rebuild or replace source text.
+Use the bilingual overlay adapter and its automatic language-inventory decision.
+If the drawing is already a complete Chinese-plus-one-foreign-language version,
+preserve the exact source PDF and mark it completed. Otherwise add selectable
+target text while preserving the source. Do not pause for language confirmation
+after processing starts.
+
 Use Codex for translation and the installed PDF skill for inspection, rendering,
 and visual verification.
 
@@ -23,8 +33,9 @@ python scripts/run_v6_job.py init <source.pdf> --jobs-root tmp/pdfs
 python scripts/run_v6_job.py resume <job-directory>
 ```
 
-Follow the returned internal action until all body blocks and all original image XObjects
-have been reviewed. Add image English as selectable PDF vector text.
+Follow the returned internal action until all body blocks are complete. Review
+only changed image regions and automatically detected anomalies. Add image
+English as selectable PDF vector text.
 Finish with:
 
 ```powershell
@@ -36,6 +47,10 @@ Deliver only when the job stage is `verified` and `final-qa.json` has
 `"passed": true`. Read
 [direct-v6-workflow.md](references/direct-v6-workflow.md) before running the
 job.
+
+Do not substitute a custom PDF-writing script for the source-bound runner.
+Preserve each native line's text-matrix rotation; page rotation alone is not
+sufficient evidence of its reading direction.
 
 Read only the references required by the detected content:
 
@@ -50,55 +65,26 @@ Read only the references required by the detected content:
 - Final acceptance:
   [quality-gates.md](references/quality-gates.md)
 
-## Acceptance gates
+## Final gates
 
-Deliver only when every applicable gate passes:
+These six gates belong to this adapter and run once at its tail. Do not invoke
+the scan or standalone-image gate set.
 
-1. Every visible source-language block and every clear image label is translated,
-   except a strictly proven complete bilingual image preserved unchanged.
-2. Source-selectable text remains selectable/copyable; native pages are not
-   flattened.
-3. Preserve the source page count, boxes, rotation, colors, tables, images,
-   reading order, and visual identity. Allow source-respecting micro-adjustments
-   to text layout when they make the translation clearer or more balanced.
-4. Outside approved image-text regions, source and cleaned-image pixels are
-   identical.
-5. Protected engineering lines, arrows, borders, symbols, and equipment pixels
-   are unchanged.
-6. Newly translated image-label English is embedded PDF text, extractable and
-   selectable; unchanged bilingual assets are exempt.
-7. Extracted text and final renders contain no unexpected source-language text.
-8. Every page is rendered and checked for omissions, overlap, clipping, missing
-   glyphs, white-box damage, and blur.
-9. The visual report must contain `unreviewed_images: 0`,
-   `untranslated_clear_image_labels: 0`, `logo_review_complete: true`,
-   `header_footer_high_resolution_review_complete: true`, and
-   `image_structural_review_complete: true`,
-   `image_difference_review_complete: true`, `unreported_confirm_items: 0`,
-   `anchored_line_failures: []`, and `text_overlap_failures: []`.
-10. Native layout must preserve source alignment and semantic hierarchy:
-    centered text remains centered; paragraph lines use one fitted size; body,
-    heading, and table roles retain their relative size and weight; text must
-    remain inside image-aware paragraph slots and physical table cells.
-11. Font weight is source evidence, not a semantic guess. Derive one weight for
-    each page typography group from the dominant corresponding source blocks;
-    heading classification alone must never create bold. Preserve exceptional
-    emphasis as a separate `special` run instead of making the group inconsistent.
-12. A diagram may be skipped as `preserve_bilingual` only when every clear
-    Chinese label has a semantic English counterpart, unmatched Chinese labels
-    equal zero, and the original image resource remains unchanged. Partial
-    bilingual diagrams must translate only the unmatched Chinese labels.
-13. On each page, `major_title`, `minor_title`, and `body` each use one font
-    family, size, and weight derived from the source page. If body text does not
-    fit, reduce the whole page body group uniformly; never shrink one paragraph
-    independently.
-14. Keep image placement unchanged by default. A large image may shift or
-    shrink proportionally only after a recorded minimum-readable-size fit
-    failure, only into verified page whitespace, and only with zero overlap,
-    clipping, aspect-ratio drift, or unapproved pixel/structure changes.
-15. For every cement-industry source block, query the bundled terminology table.
-    Use its selected translation before model wording. Use model translation
-    only when the source term or sentence is absent from the table.
+1. Translation integrity: complete coverage, consistent terminology, preserved
+   numbers/models/units, zero unexpected source-language residue, and
+   `untranslated_clear_image_labels: 0` when embedded image text exists.
+2. Text validity: translated text is selectable/copyable, fonts are embedded,
+   native pages are not flattened, and no hidden source text survives.
+3. Document integrity: page count, boxes, rotation, reading order, tables,
+   images, links, and other key structure match the source.
+4. Layout safety: automated checks report zero overlap, clipping, container
+   escape, missing glyph, or unreadably small text; record
+   `text_overlap_failures: []`.
+5. Non-text protection: graphics and images remain intact. Run specialized
+   pixel/line/image checks only for images actually modified by this adapter.
+6. Final render: render the completed PDF once. Automated checks cover all
+   pages; manually inspect only changed regions and anomaly pages. Bind the
+   evidence as `reviewed_changed_regions` and `reviewed_anomaly_pages`.
 
 ## Workflow
 
@@ -310,20 +296,20 @@ Also require:
 - pages outside approved image edits have identical content streams;
 - clean image pixels embedded in the PDF match generated clean images.
 
-### 9. Render and inspect every page
+### 9. Final render and exception review
 
-- Render every final page.
-- Check contact sheets for all pages.
-- Review every original image XObject, including logos and small icons.
-- Inspect diagrams, edited images, dense tables, headers, footers, and the final
-  page at full resolution.
-- Use vision/OCR on image-heavy pages.
+- Render the final PDF once and run automated checks across all pages.
+- Manually inspect changed image/text regions and pages flagged by automated
+  anomaly detection; do not require routine page-by-page screenshots or review
+  of unchanged image XObjects.
+- Use high-resolution vision/OCR only for a flagged or modified image-heavy
+  region.
 - Run a geometric word-overlap scan across native and image-overlay text. Any
   collision is a delivery failure even when both texts are individually valid.
 - Require zero container escapes, zero center-alignment drift, zero paragraph
   font-size variance, and zero text/image intersections before delivery.
-- Confirm every image has completed structural and difference review and every
-  `[CONFIRM]` item is reported.
+- Confirm every modified image has completed structural/difference checks and
+  every `[CONFIRM]` item is reported.
 - Fix every omission, overlap, square glyph, blur, broken line, source-language
   residue, or inconsistent label.
 

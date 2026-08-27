@@ -1,6 +1,6 @@
 ---
 name: translate-scan-pdf-professionally
-description: Use when translating scan-only or image-only PDFs whose text cannot be selected, including requests to retain Chinese and add selectable bilingual labels to engineering drawings, diagrams, title blocks, legends, logos, manuals, tables, screenshots, headers, or footers.
+description: Use when translating scan-only or image-only PDFs whose text cannot be selected, especially engineering drawings that must default to selectable Chinese-plus-foreign-language overlay, diagrams, title blocks, legends, logos, manuals, tables, screenshots, headers, or footers.
 ---
 
 # Professional Scan PDF Translation
@@ -16,6 +16,21 @@ If it reports `mixed-or-native`, use the mixed/native PDF route. If it reports
 `normalize-rotation-first`, normalize page rotation without rasterizing or
 changing visible pixels, then classify again.
 
+## Engineering-drawing default
+
+When the PDF router reports `document_kind: engineering-drawing`, always use
+additive bilingual mode. Preserve every source pixel and add selectable target
+text; ordinary wording such as “翻译为中文版” does not authorize replacement.
+
+Inventory all clear Chinese and foreign labels and run the PDF-level
+`scripts/decide_drawing_translation.py --inventory-file
+<drawing-language-inventory.json>`. If it returns
+`already_bilingual_complete`, preserve and deliver the exact source PDF and mark
+the task completed. Require Chinese plus one other language, complete semantic
+pairing, and zero unmatched clear labels. Partial bilingual drawings continue
+automatically with `add_bilingual`. Never pause for language confirmation after
+processing starts.
+
 ## Required Workflow
 
 Read these files before acting:
@@ -23,8 +38,8 @@ Read these files before acting:
 - `references/workflow.md` for the complete execution order and image-text handling rules.
 - `references/manifest-schema.md` before creating or editing the translation manifest.
 - `references/quality-gates.md` before review and delivery.
-- `references/additive-bilingual-drawings.md` when the user asks to retain
-  Chinese and add selectable target-language labels.
+- `references/additive-bilingual-drawings.md` for every engineering drawing or
+  when the user asks to retain Chinese and add selectable target-language labels.
 - `references/cement-terminology.md` only through
   `scripts/glossary_lookup.py` when cement-industry terms or sentences occur.
 
@@ -33,6 +48,8 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
 1. Classify the source and fingerprint it.
 2. Render every required page at 400 DPI and run dual-scale OCR with
    `scripts/extract_scan.py`; batching page ranges is allowed.
+   Preserve each OCR quadrilateral and its derived cardinal `rotation`. For
+   internally rotated drawings, do not infer text direction from PDF `/Rotate`.
 3. Create a manifest with `scripts/make_manifest_template.py`.
 4. Inventory every OCR line. Group lines into semantic blocks. For each cement
    block or batch, run `python scripts/glossary_lookup.py scan "<Chinese source>"`.
@@ -53,14 +70,25 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    back; never substitute a similar icon.
 6. Build with `scripts/build_scan.py`. Target-language text is embedded vector
    text and must be selectable/copyable.
-7. Render and inspect every output page at full-page and zoomed resolution. Complete the visual-review evidence.
+7. Render the completed PDF once. Run automatic checks on all pages, then
+   visually inspect only changed regions and anomaly pages. Complete the
+   adapter's own visual-review evidence.
 8. Run `scripts/verify_scan.py`. Deliver only when it exits successfully and its report says `passed: true`.
+
+The official build report and its source/manifest/output hashes are mandatory.
+Never deliver output made by a one-off PDF-writing script, and never replace
+one-to-one source-label translations with a summary panel.
 
 ## Shared Layout Rules
 
 - For additive bilingual drawings, place target text below, then right, then in
   a complete companion legend/title panel in verified whitespace. Never squeeze
   long translations into dense source cells or place them over drawing content.
+  `below` and `right` must remain within 3% of the page diagonal from the source
+  label. A `blank_panel` is allowed only for a table, title block, or legend and
+  must be directly adjacent to that structure, declare its full
+  `companion_anchor_box`, and mirror the source row/order. Never move unrelated
+  table labels into a remote page-center list.
 
 - Mark a diagram `bilingual_complete` and preserve it unchanged only when every
   clear Chinese label has a semantic target-language counterpart. Record the source

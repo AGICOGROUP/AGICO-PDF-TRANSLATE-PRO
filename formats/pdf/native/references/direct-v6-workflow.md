@@ -30,7 +30,7 @@ that action; it is not a request for a user-supplied intermediate.
 | `images_annotated` | Every inventory image and label reviewed; source type, route, OCR confidence, coverage, and confirms recorded |
 | `images_cleaned` | Clean bases built; no changes outside approved regions; declared structures and evidence pass |
 | `assembled` | Vector image labels merged into the native-text PDF |
-| `verified` | Machine gates and full-page visual review passed |
+| `verified` | Six native gates, one final render, and exception review passed |
 
 `visual-review.json` must contain the SHA-256 of the exact candidate PDF.
 Changing the candidate invalidates the report. The runner executes the native
@@ -59,9 +59,10 @@ Do not copy the candidate to the delivery directory unless:
 
 - `job.json` says `verified`;
 - `final-qa.json` says `passed: true`;
-- every page was rendered and inspected;
+- the exact candidate was rendered once and every page passed automatic checks;
+- changed regions and anomaly pages were visually inspected;
 - no clear source-language text remains;
 - source-selectable text and image-label text are selectable;
 - image pixel and protected-line gates are zero.
-- difference/alpha-overlay and structural review are complete;
+- difference/structural evidence is complete for modified images;
 - all confirm items are reported and no declared line failure remains.

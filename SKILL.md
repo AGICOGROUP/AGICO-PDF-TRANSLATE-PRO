@@ -21,3 +21,9 @@ adds translations in surrounding whitespace — the final document contains both
 languages side by side. Choose based on what the user asks for: "translate
 this PDF" → replacement; "keep the original and add translation" / "bilingual"
 / "双语版" / "中英对照" → bilingual overlay.
+
+Engineering drawings are the exception: they default to bilingual overlay
+regardless of ordinary replacement wording. If a drawing is already a complete
+Chinese-plus-one-foreign-language version, preserve the exact source and mark
+the task completed. The drawing workflow runs automatically without an
+in-process language confirmation.

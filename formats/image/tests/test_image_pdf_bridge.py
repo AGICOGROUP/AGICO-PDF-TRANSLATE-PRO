@@ -60,6 +60,10 @@ class ImagePdfBridgeTests(unittest.TestCase):
             pdf = root / "source.pdf"
             metadata = root / "image-metadata.json"
             self.assertEqual(0, self.run_bridge("wrap", str(source), str(pdf), str(metadata)).returncode)
+            pdf.with_suffix(".build-report.json").write_text(json.dumps({
+                "builder": "translate-scan-pdf-professionally",
+                "output_sha256": __import__("hashlib").sha256(pdf.read_bytes()).hexdigest(),
+            }), encoding="utf-8")
 
             output = root / "translated.png"
             result = self.run_bridge("unwrap", str(pdf), str(metadata), str(output))
@@ -71,6 +75,17 @@ class ImagePdfBridgeTests(unittest.TestCase):
                 self.assertEqual(0, translated.getpixel((0, 0))[3])
                 self.assertEqual(255, translated.getpixel((48, 32))[3])
 
+    def test_unwrap_rejects_pdf_without_official_scan_build_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            Image.new("RGB", (40, 30), "white").save(source)
+            pdf, metadata = root / "source.pdf", root / "image-metadata.json"
+            self.assertEqual(0, self.run_bridge("wrap", str(source), str(pdf), str(metadata)).returncode)
+            result = self.run_bridge("unwrap", str(pdf), str(metadata), str(root / "out.png"))
+            self.assertEqual(2, result.returncode)
+            self.assertIn("official scan", result.stderr.lower())
+
     def test_unwrap_requires_same_output_format_as_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -79,6 +94,10 @@ class ImagePdfBridgeTests(unittest.TestCase):
             pdf = root / "source.pdf"
             metadata = root / "image-metadata.json"
             self.assertEqual(0, self.run_bridge("wrap", str(source), str(pdf), str(metadata)).returncode)
+            pdf.with_suffix(".build-report.json").write_text(json.dumps({
+                "builder": "translate-scan-pdf-professionally",
+                "output_sha256": __import__("hashlib").sha256(pdf.read_bytes()).hexdigest(),
+            }), encoding="utf-8")
 
             result = self.run_bridge("unwrap", str(pdf), str(metadata), str(root / "wrong.png"))
             self.assertEqual(2, result.returncode)

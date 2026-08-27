@@ -13,6 +13,7 @@ from reportlab.pdfgen import canvas
 
 ROOT = Path(__file__).resolve().parents[3]
 ROUTER = ROOT / "formats" / "pdf" / "scripts" / "route_pdf_file.py"
+BILINGUAL_ADAPTER = "formats/pdf/bilingual/SKILL.md"
 
 
 class PdfRouterContractTests(unittest.TestCase):
@@ -38,6 +39,16 @@ class PdfRouterContractTests(unittest.TestCase):
             writer.write(stream)
         return path
 
+    def make_large_drawing_pdf(self, path: Path, text: str | None = None) -> Path:
+        page = canvas.Canvas(str(path), pagesize=(1684, 1191))
+        page.rect(30, 30, 1624, 1131)
+        for offset in range(20):
+            page.line(100, 150 + offset * 35, 900, 150 + offset * 35)
+        if text:
+            page.drawString(1250, 100, text)
+        page.save()
+        return path
+
     def test_routes_native_text_pdf_to_native_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
             source = self.make_text_pdf(Path(directory) / "native.pdf")
@@ -58,6 +69,55 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual("formats/pdf/scan/SKILL.md", report["adapter"])
             self.assertEqual(0, report["native_text_pages"])
             self.assertEqual(2, report["page_count"])
+
+    def test_routes_large_native_engineering_drawing_to_bilingual_overlay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_large_drawing_pdf(
+                Path(directory) / "drawing.pdf", "SECTION A-A"
+            )
+            result = self.run_router(source)
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertEqual(BILINGUAL_ADAPTER, report["adapter"])
+            self.assertEqual("add_bilingual", report["translation_mode"])
+            self.assertEqual("inspect_bilingual_coverage", report["next_action"])
+
+    def test_routes_large_scan_engineering_drawing_to_scan_additive_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_large_drawing_pdf(Path(directory) / "drawing.pdf")
+            result = self.run_router(source)
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertEqual("formats/pdf/scan/SKILL.md", report["adapter"])
+            self.assertEqual("add_bilingual", report["translation_mode"])
+            self.assertEqual("inspect_bilingual_coverage", report["next_action"])
+
+    def test_routes_extreme_portrait_scan_sheet_as_rotated_engineering_drawing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_blank_pdf(Path(directory) / "rotated-content-drawing.pdf")
+            reader = PdfReader(source)
+            writer = PdfWriter()
+            writer.add_blank_page(width=842, height=1775)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            result = self.run_router(source)
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertIn("image_internal_rotation_candidate", report["drawing_evidence"])
+            self.assertEqual("add_bilingual", report["translation_mode"])
+
+    def test_normal_report_keeps_replacement_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_text_pdf(Path(directory) / "report.pdf", "Report body")
+            result = self.run_router(source)
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("document", report["document_kind"])
+            self.assertEqual("replace", report["translation_mode"])
+            self.assertEqual("formats/pdf/native/SKILL.md", report["adapter"])
 
     def test_routes_mixed_pdf_to_native_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
