@@ -18,8 +18,11 @@ from contracts import TextOverflowError, fit_text, validate_manifest
 
 REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\arial.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
 BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\arialbd.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
+CJK_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\msyh.ttc")]
+CJK_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\msyhbd.ttc")]
 REGULAR_FONT = "ScanTranslation-Regular"
 BOLD_FONT = "ScanTranslation-Bold"
+OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
 ROLE_DEFAULTS = {
     "title": (18, 11), "subtitle": (15, 10), "heading": (16, 10),
     "subheading": (14, 9), "body": (10, 6), "list_item": (10, 6),
@@ -73,10 +76,16 @@ def _first_existing(paths: list[Path]) -> Path:
     raise RuntimeError(f"No embeddable TrueType font found in: {paths}")
 
 
-def register_fonts() -> None:
+def register_fonts(target_language: str = "") -> None:
+    global REGULAR_FONT, BOLD_FONT
+    is_cjk = str(target_language).lower().replace("_", "-").startswith(("zh", "ja", "ko"))
+    REGULAR_FONT = "ScanTranslation-CJK-Regular" if is_cjk else "ScanTranslation-Regular"
+    BOLD_FONT = "ScanTranslation-CJK-Bold" if is_cjk else "ScanTranslation-Bold"
+    regular_paths = CJK_REGULAR_FONT_PATHS if is_cjk else REGULAR_FONT_PATHS
+    bold_paths = CJK_BOLD_FONT_PATHS if is_cjk else BOLD_FONT_PATHS
     if REGULAR_FONT not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont(REGULAR_FONT, str(_first_existing(REGULAR_FONT_PATHS))))
-        pdfmetrics.registerFont(TTFont(BOLD_FONT, str(_first_existing(BOLD_FONT_PATHS))))
+        pdfmetrics.registerFont(TTFont(REGULAR_FONT, str(_first_existing(regular_paths))))
+        pdfmetrics.registerFont(TTFont(BOLD_FONT, str(_first_existing(bold_paths))))
 
 
 def _clamp_box(box: list[float], width: int, height: int) -> tuple[int, int, int, int]:
@@ -373,7 +382,7 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
 
 
 def build_pdf(manifest: dict, output_path: str | Path) -> dict:
-    register_fonts()
+    register_fonts(manifest.get("target_language", ""))
     validate_manifest(manifest)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -381,7 +390,13 @@ def build_pdf(manifest: dict, output_path: str | Path) -> dict:
     clean_dir.mkdir(parents=True, exist_ok=True)
     page_index = {page["source_page"]: page for page in manifest["pages"]}
     blocks_by_page = {number: [block for block in manifest["blocks"] if block["page"] == number] for number in manifest["selected_pages"]}
+    manifest_hash = hashlib.sha256(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     report = {
+        "builder": OFFICIAL_BUILDER,
+        "source_sha256": str(manifest.get("source_sha256", "")),
+        "manifest_sha256": manifest_hash,
         "pages": [], "rendered_blocks": [], "outside_approved_pixel_changes": 0,
         "changed_pixel_count": 0,
         "source_crop_runs": [], "source_crop_run_count": 0, "mixed_color_block_count": 0,
@@ -423,6 +438,7 @@ def build_pdf(manifest: dict, output_path: str | Path) -> dict:
         report["pages"].append({"source_page": page_number, "clean_path": str(clean_path), "rendered_block_ids": rendered_ids, "typography_evidence": typography_evidence, **layout_report, **clean_report})
     pdf.save()
     report["output"] = str(output)
+    report["output_sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     report["rendered_block_count"] = len(report["rendered_blocks"])
     report["source_crop_run_count"] = len(report["source_crop_runs"])
     output.with_suffix(".build-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -14,13 +14,11 @@ class DirectV6ContractTests(unittest.TestCase):
             "run_v6_job.py resume",
             "run_v6_job.py verify",
             "stage is `verified`",
-            "original image XObjects",
             "selectable PDF vector text",
             "Never use v5 or v6",
-            "unreviewed_images",
+            "reviewed_changed_regions",
+            "reviewed_anomaly_pages",
             "untranslated_clear_image_labels",
-            "logo_review_complete",
-            "header_footer_high_resolution_review_complete",
             "text_overlap_failures",
         ):
             self.assertIn(required, text)

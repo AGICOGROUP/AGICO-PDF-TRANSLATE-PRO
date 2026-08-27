@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import math
 
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -36,6 +37,21 @@ def _validate_rgb(value: object, label: str) -> None:
 
 def _boxes_overlap(first: list[float], second: list[float]) -> bool:
     return min(first[2], second[2]) > max(first[0], second[0]) and min(first[3], second[3]) > max(first[1], second[1])
+
+
+def _box_gap(first: list[float], second: list[float]) -> float:
+    dx = max(float(first[0]) - float(second[2]), float(second[0]) - float(first[2]), 0.0)
+    dy = max(float(first[1]) - float(second[3]), float(second[1]) - float(first[3]), 0.0)
+    return math.hypot(dx, dy)
+
+
+def _box_contains(outer: list[float], inner: list[float]) -> bool:
+    return (
+        float(outer[0]) <= float(inner[0])
+        and float(outer[1]) <= float(inner[1])
+        and float(outer[2]) >= float(inner[2])
+        and float(outer[3]) >= float(inner[3])
+    )
 
 
 def _validate_rich_lines(block: dict, page: dict) -> None:
@@ -95,6 +111,11 @@ def validate_manifest(manifest: dict) -> dict:
         raise ManifestError("source_lines must contain stable non-empty IDs")
     if len(source_ids) != len(set(source_ids)):
         raise ManifestError("duplicate source line IDs in source_lines")
+    source_by_id = {line["id"]: line for line in source_lines}
+    for line in source_lines:
+        rotation = int(line.get("rotation", 0))
+        if rotation not in {0, 90, 180, 270}:
+            raise ManifestError(f"source line {line['id']} has invalid rotation {rotation}")
 
     page_index = {page.get("source_page"): page for page in manifest.get("pages", [])}
     for page_number, page in page_index.items():
@@ -149,6 +170,28 @@ def validate_manifest(manifest: dict) -> dict:
                 )
             if "clean_box" in block:
                 raise ManifestError(f"add_bilingual block {block_id} must not define clean_box")
+            if block.get("placement") == "blank_panel" and len(block["source_line_ids"]) != 1:
+                raise ManifestError(
+                    f"add_bilingual blank-panel block {block_id} requires one-to-one source-label mapping"
+                )
+        assigned_rotations = {
+            int(source_by_id[line_id].get("rotation", 0))
+            for line_id in block["source_line_ids"]
+            if line_id in source_by_id
+        }
+        if block["status"] == "translated" and assigned_rotations:
+            if len(assigned_rotations) != 1:
+                raise ManifestError(f"block {block_id} mixes source rotations")
+            source_rotation = next(iter(assigned_rotations))
+            if source_rotation and "rotation" not in block:
+                raise ManifestError(f"block {block_id} must inherit source rotation {source_rotation}")
+            rendered_rotation = int(block.get("rotation", 0))
+            if rendered_rotation not in {0, 90, 180, 270}:
+                raise ManifestError(f"block {block_id} has invalid rotation {rendered_rotation}")
+            if rendered_rotation != source_rotation:
+                raise ManifestError(
+                    f"block {block_id} rotation {rendered_rotation} does not match source rotation {source_rotation}"
+                )
         if block["status"] == "preserve_confirm" and block["action"] != "preserve":
             raise ManifestError(
                 f"block {block_id} preserve_confirm must use action 'preserve'"
@@ -194,6 +237,28 @@ def validate_manifest(manifest: dict) -> dict:
                     raise ManifestError(f"add_bilingual block {block_id} is not below its source anchor")
                 if block["placement"] == "right" and block["box"][0] < anchor[2]:
                     raise ManifestError(f"add_bilingual block {block_id} is not right of its source anchor")
+                page_diagonal = math.hypot(float(page["pixel_width"]), float(page["pixel_height"]))
+                maximum_gap = max(48.0, page_diagonal * 0.03)
+                if block["placement"] in {"below", "right"} and _box_gap(anchor, block["box"]) > maximum_gap:
+                    raise ManifestError(f"add_bilingual block {block_id} is too far from its source anchor")
+                if block["placement"] == "blank_panel":
+                    companion = block.get("companion_anchor_box")
+                    if not isinstance(companion, list) or len(companion) != 4:
+                        raise ManifestError(
+                            f"add_bilingual block {block_id} blank_panel requires companion_anchor_box"
+                        )
+                    if block.get("companion_kind") not in {"table", "title_block", "legend"}:
+                        raise ManifestError(
+                            f"add_bilingual block {block_id} blank_panel requires companion_kind"
+                        )
+                    if any(not _box_contains(companion, line["box"]) for line in assigned_lines):
+                        raise ManifestError(
+                            f"add_bilingual block {block_id} companion_anchor_box must contain its source label"
+                        )
+                    if _box_gap(companion, block["box"]) > maximum_gap:
+                        raise ManifestError(
+                            f"add_bilingual block {block_id} blank_panel is too far from its companion anchor"
+                        )
         _validate_rich_lines(block, page)
         assignments.extend(block["source_line_ids"])
         translated_count += block["status"] == "translated"

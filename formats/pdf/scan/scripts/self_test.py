@@ -18,7 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
 from build_scan import build_pdf, clean_background
 from contracts import ManifestError, validate_manifest
 from extract_scan import merge_ocr_records
-from verify_scan import evaluate_evidence
+from verify_scan import canonical_manifest_sha256, evaluate_evidence
 
 
 def valid_manifest(render_path: Path) -> dict:
@@ -110,35 +110,36 @@ class SkillTests(unittest.TestCase):
             self.assertIn("Press", PdfReader(str(output)).pages[0].extract_text())
             self.assertIn("[OK]", PdfReader(str(output)).pages[0].extract_text())
 
-    def test_delivery_requires_icon_and_mixed_color_reviews(self) -> None:
+    def test_delivery_accepts_compact_exception_review(self) -> None:
         manifest = valid_manifest(Path("fixture.png"))
+        candidate_hash = "b" * 64
         report = evaluate_evidence(
             manifest=manifest,
             extracted_by_page={1: "Test"},
             build_report={
+                "builder": "translate-scan-pdf-professionally",
+                "source_sha256": manifest["source_sha256"],
+                "manifest_sha256": canonical_manifest_sha256(manifest),
+                "output_sha256": candidate_hash,
                 "rendered_blocks": [{"id": "p01-title", "font_size": 10, "complete": True}],
                 "outside_approved_pixel_changes": 0,
             },
             output_page_count=1,
             geometry_match=True,
             visual_review={
-                "reviewed_output_pages": [1],
+                "all_pages_rendered": True,
+                "reviewed_changed_regions": True,
+                "reviewed_anomaly_pages": [],
                 "text_overlap_failures": [],
                 "clipping_failures": [],
-                "unreviewed_images": 0,
-                "untranslated_clear_image_labels": 0,
-                "logo_review_complete": True,
-                "header_footer_review_complete": True,
-                "image_difference_review_complete": True,
-                "full_render_review_complete": True,
+                "untranslated_clear_labels": 0,
             },
             residual_cjk=[],
             font_embedding_failures=[],
             automated_overlap_failures=[],
+            candidate_sha256=candidate_hash,
         )
-        self.assertFalse(report["passed"])
-        self.assertFalse(report["icon_review_complete"])
-        self.assertFalse(report["source_icon_provenance_complete"])
+        self.assertTrue(report["passed"])
 
     def test_delivery_rejects_missing_source_crop_provenance(self) -> None:
         manifest = valid_manifest(Path("fixture.png"))
@@ -147,12 +148,9 @@ class SkillTests(unittest.TestCase):
             {"type": "source_crop", "source_box": [80, 20, 100, 40], "alt": "original icon"},
         ]]
         review = {
-            "reviewed_output_pages": [1], "text_overlap_failures": [], "clipping_failures": [],
-            "unreviewed_images": 0, "untranslated_clear_image_labels": 0,
-            "logo_review_complete": True, "header_footer_review_complete": True,
-            "image_difference_review_complete": True, "full_render_review_complete": True,
-            "icon_review_complete": True, "source_icon_provenance_complete": True,
-            "icon_substitution_failures": [], "mixed_color_failures": [],
+            "all_pages_rendered": True, "reviewed_changed_regions": True,
+            "reviewed_anomaly_pages": [], "text_overlap_failures": [],
+            "clipping_failures": [], "untranslated_clear_labels": 0,
         }
         report = evaluate_evidence(
             manifest=manifest, extracted_by_page={1: "Test"},

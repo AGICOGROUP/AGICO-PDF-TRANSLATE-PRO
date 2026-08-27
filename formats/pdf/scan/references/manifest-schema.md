@@ -1,5 +1,20 @@
 # Manifest contract
 
+## Orientation and source mapping
+
+Copy each OCR line's `quad` and cardinal `rotation` from the extraction report.
+Every translated block inherits the rotation of its assigned source line; a
+nonzero rotation may not be omitted or changed. In a `blank_panel`, one
+translation maps to exactly one source-line ID. Summary text cannot satisfy
+several source labels.
+
+`below` and `right` placements must remain within 3% of the page diagonal from
+their source anchor. A `blank_panel` additionally requires
+`companion_kind: table|title_block|legend` and a four-value
+`companion_anchor_box` containing the assigned source label. Its target box
+must be directly adjacent to that structural anchor under the same distance
+limit.
+
 Copy page geometry and `source_lines` from `extraction-report.json`; do not renumber source-line IDs.
 
 ```json

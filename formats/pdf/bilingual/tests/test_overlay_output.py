@@ -32,7 +32,7 @@ class BilingualOverlayOutputTests(unittest.TestCase):
 
             translations.write_text(
                 json.dumps(
-                    [{"page": 0, "translation": chinese_text, "x": 36, "y": 72}],
+                    [{"id": "p1-l1", "page": 0, "source": "Hello", "translation": chinese_text, "x": 36, "y": 72, "rotation": 90}],
                     ensure_ascii=False,
                 ),
                 encoding="utf-8",
@@ -65,8 +65,29 @@ class BilingualOverlayOutputTests(unittest.TestCase):
             extracted = output_doc[0].get_text()
             self.assertIn("Hello", extracted)
             self.assertIn(chinese_text, extracted)
+            lines = [line for block in output_doc[0].get_text("dict")["blocks"] if "lines" in block for line in block["lines"]]
+            translated_line = next(line for line in lines if chinese_text in "".join(span["text"] for span in line["spans"]))
             output_doc.close()
             source_doc.close()
+            self.assertAlmostEqual(0.0, translated_line["dir"][0], places=2)
+            self.assertAlmostEqual(-1.0, translated_line["dir"][1], places=2)
+            report = json.loads(output.with_suffix(".build-report.json").read_text(encoding="utf-8"))
+            self.assertEqual("translate-pdf-bilingual-overlay", report["builder"])
+            self.assertEqual(1, report["mapped_source_count"])
+
+    def test_rejects_unmapped_or_duplicate_source_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            source = temp / "source.pdf"
+            doc = pymupdf.open(); doc.new_page(); doc.save(source); doc.close()
+            translations = temp / "translations.json"
+            translations.write_text(json.dumps([
+                {"id": "same", "page": 0, "source": "A", "translation": "甲", "x": 10, "y": 10},
+                {"id": "same", "page": 0, "source": "B", "translation": "乙", "x": 20, "y": 20},
+            ], ensure_ascii=False), encoding="utf-8")
+            result = subprocess.run([sys.executable, str(SCRIPT), str(source), "-t", str(translations), "-o", str(temp / "out.pdf"), "--font-file", str(FONT)], capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(2, result.returncode)
+            self.assertIn("unique", result.stderr)
 
 
 if __name__ == "__main__":

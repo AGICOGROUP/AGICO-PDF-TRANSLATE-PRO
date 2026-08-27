@@ -1,9 +1,9 @@
 ---
 name: translate-pdf-bilingual-overlay
 description: >-
-  Use when the user wants to keep the original text visible and add Chinese
-  translation beside it in the surrounding whitespace, producing a bilingual
-  dual-language PDF. Triggers on phrases like "保留原文加翻译", "双语版",
+  Use when a PDF is an engineering drawing or the user wants to keep the original
+  text visible and add Chinese translation beside it in surrounding whitespace.
+  Triggers on engineering drawings, "保留原文加翻译", "双语版",
   "bilingual", "中英对照", "原文后面加中文", "在空白处加翻译",
   "dual-language PDF". Do NOT use this skill when the user wants the original
   text replaced by translation — for replacement use the native or scan adapter
@@ -20,8 +20,17 @@ visible and selectable, and the Chinese translation is placed beside it in
 available whitespace. This is fundamentally different from replacement
 translation: nothing in the source is removed, overwritten, or flattened.
 
-Use this skill when the user explicitly wants both languages visible
-side by side in the same document.
+Use this skill when the user explicitly wants both languages visible or when
+the PDF router classifies the file as an engineering drawing. Drawings default
+to bilingual overlay even when the request only says “翻译为中文版/英文版”.
+
+Before translation, inventory every clear Chinese and foreign label and run
+`python ../scripts/decide_drawing_translation.py --inventory-file
+<drawing-language-inventory.json>`. When it returns
+`already_bilingual_complete`, preserve and deliver the exact source PDF as an
+already-completed bilingual drawing. Do not translate, rebuild, or add another
+language. Continue automatically for every other decision; do not pause after
+the workflow starts.
 
 ## When to use this skill vs. the native/scan adapters
 
@@ -29,6 +38,8 @@ side by side in the same document.
 |---|---|
 | Replace source text with translation | `formats/pdf/native/SKILL.md` or `formats/pdf/scan/SKILL.md` |
 | Keep source text, add translation beside it | **this skill** |
+| Engineering drawing, ordinary translation wording | **this skill** |
+| Complete Chinese + one-foreign-language drawing | Preserve source; mark complete |
 
 Never run this skill and a replacement adapter on the same output. The two
 goals are mutually exclusive: replacement adapters remove source text
@@ -67,12 +78,14 @@ translation and the coordinates where the translation should be placed:
 ```json
 [
   {
+    "id": "p01-l001",
     "page": 0,
     "source": "PLANO DE INSPEÇÃO E TESTES",
     "translation": "检验和试验计划",
     "x": 227.2,
     "y": 106,
-    "fontsize": 7
+    "fontsize": 7,
+    "rotation": 90
   }
 ]
 ```
@@ -85,6 +98,9 @@ translation and the coordinates where the translation should be placed:
 
 Translate every visible source-language block: body text, table headers,
 table cells, headers, footers, labels, abbreviations, and revision history.
+Every record requires a unique `id` and its exact `source`; keep a one-to-one
+inventory. Copy the source span's cardinal reading direction into `rotation`
+(`0/90/180/270`). Never collapse several labels into one summary translation.
 Translate by engineering context, not word-by-word. Preserve numbers, units,
 standards, model codes, and formulas untranslated.
 
@@ -108,7 +124,8 @@ The script:
 
 ### 4. Verify the output
 
-Render every page to an image and visually inspect:
+Render the completed PDF once. Run automatic checks on every page, then
+visually inspect only changed regions and anomaly pages:
 
 ```powershell
 python -c "import fitz; d=fitz.open('<job>/bilingual-output.pdf'); [p.get_pixmap(matrix=fitz.Matrix(2,2)).save(f'<job>/preview_{i+1}.png') for i,p in enumerate(d)]"
@@ -160,7 +177,8 @@ Deliver only when every gate passes:
 5. Chinese text uses an embedded CJK font — no missing-glyph boxes.
 6. Font sizes are consistent within each role group on each page.
 7. Numbers, units, standards, and model codes are preserved untranslated.
-8. Rendered preview of every page passes visual inspection.
+8. The build report identifies `translate-pdf-bilingual-overlay`, binds source,
+   translation packet, and output hashes, and changed-region review passes.
 
 ## Failure policy
 

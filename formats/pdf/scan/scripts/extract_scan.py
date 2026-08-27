@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import re
 import sys
+import math
 from pathlib import Path
 
 from PIL import Image
@@ -46,6 +47,26 @@ def _normalize_box(points, scale: float) -> list[float]:
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
+def _normalize_quad(points, scale: float) -> list[list[float]]:
+    return [[float(point[0]) / scale, float(point[1]) / scale] for point in points]
+
+
+def rotation_from_quad(points) -> int:
+    """Return the nearest cardinal reading direction from an OCR quadrilateral."""
+    if not isinstance(points, (list, tuple)) or len(points) < 3:
+        raise ValueError("OCR quadrilateral requires at least three points")
+    edges = []
+    for start, end in ((points[0], points[1]), (points[1], points[2])):
+        dx = float(end[0]) - float(start[0])
+        dy = float(end[1]) - float(start[1])
+        edges.append((dx * dx + dy * dy, dx, dy))
+    _, dx, dy = max(edges, key=lambda item: item[0])
+    if abs(dx) + abs(dy) < 1e-9:
+        raise ValueError("OCR quadrilateral has no readable baseline")
+    angle = math.degrees(math.atan2(dy, dx)) % 360
+    return int((round(angle / 90) * 90) % 360)
+
+
 def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
     working = image
     if scale != 1.0:
@@ -62,6 +83,8 @@ def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
             records.append(
                 {
                     "box": _normalize_box(points, scale),
+                    "quad": _normalize_quad(points, scale),
+                    "rotation": rotation_from_quad(points),
                     "text": value,
                     "score": float(score),
                     "scale": scale,

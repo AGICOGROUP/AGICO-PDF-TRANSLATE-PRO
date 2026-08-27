@@ -1,62 +1,54 @@
-# Mandatory quality gates
+# Scan PDF final gates
+
+The verifier requires the official scan builder identity and matching source,
+manifest, and output hashes. It also rejects unassigned source lines and any
+translation whose reading direction differs from its source, including
+rotation internal to a raster page.
+It rejects remote bilingual placements: direct labels must be near their source,
+and companion panels must be adjacent to their declared table/title/legend
+anchor so every correspondence is immediately traceable.
+
+These gates run once at the end of the scan adapter. They do not inherit native
+PDF or standalone-image gates.
 
 ## Visual-review evidence
 
-Create this only after inspecting the final rendered PDF:
+Create this against the exact final PDF after the one final render:
 
 ```json
 {
-  "candidate_sha256": "<64-character SHA-256 of the exact reviewed PDF>",
-  "reviewed_output_pages": [1, 2],
+  "candidate_sha256": "<64-character SHA-256>",
+  "all_pages_rendered": true,
+  "reviewed_changed_regions": true,
+  "reviewed_anomaly_pages": [],
   "text_overlap_failures": [],
   "clipping_failures": [],
-  "unreviewed_images": 0,
-  "untranslated_clear_image_labels": 0,
-  "logo_review_complete": true,
-  "header_footer_review_complete": true,
-  "image_difference_review_complete": true,
-  "full_render_review_complete": true,
-  "icon_review_complete": true,
-  "source_icon_provenance_complete": true,
-  "icon_substitution_failures": [],
-  "mixed_color_failures": [],
-  "reviewed_ocr_false_positives": []
+  "untranslated_clear_labels": 0
 }
 ```
 
-An OCR false-positive record requires `output_page`, `box`, and `reason`. Accept it only after source/output crop comparison proves the pixels are artwork, a symbol, noise, or an explicitly illegible source mark. The verifier matches boxes by IoU and fails unmatched declarations.
+`reviewed_anomaly_pages` lists every page flagged by automatic checks after it
+has been reviewed. An empty list is valid when there were no anomalies.
 
-## Delivery must satisfy all gates
+## Seven final gates
 
-- Source OCR coverage: every source-line ID assigned exactly once.
-- Translation coverage: every `replace` block rendered and extractable from the output text layer.
-- Cement terminology: English output uses the lookup-selected term. Other target
-  languages record that term as the semantic pivot and use one consistent
-  professional target-language equivalent.
-- Selectability: all added target-language text exists as embedded vector text; fonts are embedded.
-- Page integrity: page count, page order, dimensions, and orientation match the selected source pages.
-- Graphic integrity: zero pixel changes outside approved cleanup boxes; no blurred, missing, displaced, or covered non-text structure.
-- Icon fidelity: every icon preserved in the raster base or restored from exact source pixels; build-report provenance reviewed; zero text, Unicode, library-icon, or approximate-icon substitutions.
-- Color fidelity: meaningful mixed colors and emphasis preserved; zero unreviewed or flattened command/link/warning color changes.
-- Language residue: replacement mode has zero unexplained CJK text. Additive
-  bilingual mode permits CJK only inside source-line boxes assigned to
-  `add_bilingual` or validated `bilingual_complete` blocks.
-- Bilingual preservation: every exempt CJK region is hash-bound, has complete
-  Chinese/target-language pair coverage, and has zero unmatched Chinese labels.
-- Layout: zero detected or visually observed text overlaps; zero clipping; no text below minimum font size.
-- Additive integrity: pure `add_bilingual` output has `changed_pixel_count: 0`;
-  each translation box is below, right, or in a verified blank panel and does
-  not intersect source text or protected graphics.
-- Typography: each page has one rendered font family, size, and weight for each
-  of `major_title`, `minor_title`, and `body`; dense content reduces the full
-  group uniformly.
-- Image-layout fallback: every placement adjustment follows a recorded fit
-  failure, preserves aspect ratio and exact source content, and has zero changes
-  outside approved original/target regions.
-- Image review: every page and every image region reviewed; clear logo, header, footer, screenshot, table, diagram text, icon, and mixed-color instruction translated or explicitly preserved.
+1. OCR and translation coverage: every source-line ID is assigned exactly once
+   and every required translated block is rendered.
+2. Translation integrity: terminology, numbers, models, units, and meaningful
+   colors are preserved; replacement mode has zero unexplained source-language
+   residue and additive mode has no unmatched clear source label.
+3. Text-layer validity: added target text is extractable/selectable, uses
+   embedded fonts, and contains no missing glyphs.
+4. Page integrity: page count, order, dimensions, and orientation match the
+   selected source pages.
+5. Graphic integrity: automatic build evidence reports zero changes outside
+   approved regions and exact-source provenance for restored icons/crops.
+6. Layout safety: automatic and exception review reports zero overlap,
+   clipping, below-minimum text, or protected-structure coverage.
+7. Final render: render the completed PDF once, automatically check all pages,
+   and manually inspect only changed regions and anomaly pages.
 
-`passed: true` is necessary but not sufficient if the review evidence is stale or dishonest. Any build change invalidates the previous visual review.
-The verifier must reject a visual-review report whose `candidate_sha256` does
-not equal the exact output PDF.
-
-The verifier also derives automatic gates: the number of manifest `source_crop` runs must equal the number of build-report provenance records; every record must contain valid source/output boxes, source page, alt description, and a 64-character pixel SHA-256; every manifest block with multiple text-run colors must be reported as mixed-color rendered.
+The verifier must bind review evidence to the exact candidate SHA-256. Any
+output change invalidates the evidence. One gate may aggregate several cheap
+automatic assertions; it must not trigger another adapter's workflow or a
+second full-document render.

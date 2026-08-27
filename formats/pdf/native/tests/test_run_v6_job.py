@@ -211,7 +211,7 @@ class RunV6JobTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unreviewed original images", result.stderr)
 
-    def test_verify_rejects_logo_footer_overlap_or_unreviewed_images(self):
+    def test_verify_rejects_overlap_and_incomplete_exception_review(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             source = root / "source.pdf"
@@ -351,7 +351,7 @@ class RunV6JobTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("informational image text must be translated", result.stderr)
 
-    def test_verify_requires_image_structural_evidence(self):
+    def test_verify_requires_changed_region_review(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             source = root / "source.pdf"
@@ -373,10 +373,7 @@ class RunV6JobTests(unittest.TestCase):
                 json.dumps(
                     {
                         "all_pages_rendered": True,
-                        "unreviewed_images": 0,
                         "untranslated_clear_image_labels": 0,
-                        "logo_review_complete": True,
-                        "header_footer_high_resolution_review_complete": True,
                         "text_overlap_failures": [],
                     }
                 ),
@@ -386,7 +383,7 @@ class RunV6JobTests(unittest.TestCase):
             result = run("verify", job_dir, "--visual-review-report", report)
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("image_structural_review_complete", result.stderr)
+            self.assertIn("reviewed_changed_regions", result.stderr)
 
 
 if __name__ == "__main__":

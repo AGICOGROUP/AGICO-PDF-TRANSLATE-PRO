@@ -1,5 +1,30 @@
 # Additive bilingual engineering drawings
 
+## Default and completion rule
+
+Engineering drawings use this mode by default, even when the request does not
+say “双语”. The business output is Chinese plus one other language.
+
+Before adding text, inventory both language sets. A drawing already containing
+Chinese and another language is complete only when every clear label is paired
+semantically in both directions and both unmatched counts are zero. In that
+case return the exact source PDF with status `already_bilingual_complete`.
+Otherwise continue automatically and add only the missing target labels. Do
+not stop for clarification once processing has started.
+
+Use this inventory contract:
+
+```json
+{
+  "document_kind": "engineering-drawing",
+  "clear_chinese_label_count": 12,
+  "clear_foreign_label_count": 12,
+  "matched_bilingual_pair_count": 12,
+  "unmatched_chinese_label_count": 0,
+  "unmatched_foreign_label_count": 0
+}
+```
+
 Use this mode when the user wants to retain Chinese and add another language as
 selectable PDF text. Treat the scanned drawing as immutable artwork and add a
 separate embedded vector-text layer.
@@ -26,6 +51,14 @@ separate embedded vector-text layer.
    create a complete target-language companion table in verified page whitespace.
 4. For dense title blocks, keep the Chinese title block intact and create a
    target-language companion panel directly above or beside it.
+
+For `below` or `right`, the edge-to-edge gap must not exceed 3% of the page
+diagonal (48 source-render pixels minimum tolerance). For `blank_panel`, set
+`companion_kind` to `table`, `title_block`, or `legend`; set
+`companion_anchor_box` to the complete source structure containing the source
+label; and keep the panel within the same gap limit from that structure. The
+panel must mirror source rows/order so every translation remains visually
+traceable. Free-floating page-center translation lists are forbidden.
 
 Use one consistent target-text color per drawing. A dark engineering blue is a
 good default when the source is gray/black, but use black when the customer

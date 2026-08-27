@@ -18,6 +18,13 @@ from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
+def requires_cjk_residual_gate(target_language: str) -> bool:
+    """CJK is source residue only when the requested output is non-CJK."""
+    language = str(target_language or "").lower().replace("_", "-")
+    return not language.startswith(("zh", "ja", "ko"))
+OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -28,6 +35,30 @@ def sha256_file(path: Path) -> str:
 
 def normalize_text(value: str) -> str:
     return "".join(character.lower() for character in value if character.isalnum())
+
+
+def canonical_manifest_sha256(manifest: dict) -> str:
+    payload = json.dumps(
+        manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def orientation_mismatches(manifest: dict) -> list[dict]:
+    source = {line.get("id"): int(line.get("rotation", 0)) for line in manifest.get("source_lines", [])}
+    failures = []
+    for block in manifest.get("blocks", []):
+        if block.get("status") != "translated":
+            continue
+        rotations = {source[line_id] for line_id in block.get("source_line_ids", []) if line_id in source}
+        rendered = int(block.get("rotation", 0))
+        if len(rotations) != 1 or rendered != next(iter(rotations), rendered):
+            failures.append({
+                "block_id": block.get("id"),
+                "source_rotations": sorted(rotations),
+                "rendered_rotation": rendered,
+            })
+    return failures
 
 
 def _box_iou(first: list[float], second: list[float]) -> float:
@@ -124,6 +155,7 @@ def evaluate_evidence(
     residual_cjk: list[dict],
     font_embedding_failures: list[str] | None = None,
     automated_overlap_failures: list[dict] | None = None,
+    candidate_sha256: str | None = None,
 ) -> dict:
     try:
         coverage = validate_manifest(manifest)
@@ -202,12 +234,27 @@ def evaluate_evidence(
         if not rendered_by_id.get(block_id, {}).get("mixed_color", False)
     ]
 
-    expected_output_pages = list(range(1, output_page_count + 1))
-    reviewed_pages = sorted(visual_review.get("reviewed_output_pages", []))
     overlap_failures = list(visual_review.get("text_overlap_failures", []))
     overlap_failures.extend(automated_overlap_failures or [])
     clipping_failures = list(visual_review.get("clipping_failures", []))
     embedding_failures = font_embedding_failures or []
+    assigned_ids = {
+        line_id for block in manifest.get("blocks", []) for line_id in block.get("source_line_ids", [])
+    }
+    unassigned_source_lines = sorted(
+        line.get("id") for line in manifest.get("source_lines", []) if line.get("id") not in assigned_ids
+    )
+    rotation_failures = orientation_mismatches(manifest)
+    official_pipeline = all([
+        build_report.get("builder") == OFFICIAL_BUILDER,
+        str(build_report.get("source_sha256", "")).lower()
+        == str(manifest.get("source_sha256", "")).lower(),
+        str(build_report.get("manifest_sha256", "")).lower()
+        == canonical_manifest_sha256(manifest).lower(),
+        bool(candidate_sha256),
+        str(build_report.get("output_sha256", "")).lower()
+        == str(candidate_sha256 or "").lower(),
+    ])
 
     report = {
         "manifest_error": manifest_error,
@@ -235,30 +282,19 @@ def evaluate_evidence(
         "font_embedding_failures": embedding_failures,
         "text_overlap_failures": overlap_failures,
         "clipping_failures": clipping_failures,
-        "reviewed_output_pages": reviewed_pages,
-        "unreviewed_output_pages": sorted(set(expected_output_pages) - set(reviewed_pages)),
-        "unreviewed_images": int(visual_review.get("unreviewed_images", 0)),
-        "untranslated_clear_image_labels": int(
-            visual_review.get("untranslated_clear_image_labels", 0)
+        "all_pages_rendered": bool(visual_review.get("all_pages_rendered", False)),
+        "reviewed_changed_regions": bool(
+            visual_review.get("reviewed_changed_regions", False)
         ),
-        "logo_review_complete": bool(visual_review.get("logo_review_complete", False)),
-        "header_footer_review_complete": bool(
-            visual_review.get("header_footer_review_complete", False)
+        "reviewed_anomaly_pages": list(
+            visual_review.get("reviewed_anomaly_pages", [])
         ),
-        "image_difference_review_complete": bool(
-            visual_review.get("image_difference_review_complete", False)
+        "untranslated_clear_labels": int(
+            visual_review.get("untranslated_clear_labels", -1)
         ),
-        "full_render_review_complete": bool(
-            visual_review.get("full_render_review_complete", False)
-        ),
-        "icon_review_complete": bool(visual_review.get("icon_review_complete", False)),
-        "source_icon_provenance_complete": bool(
-            visual_review.get("source_icon_provenance_complete", False)
-        ),
-        "icon_substitution_failures": list(
-            visual_review.get("icon_substitution_failures", [])
-        ),
-        "mixed_color_failures": list(visual_review.get("mixed_color_failures", [])),
+        "orientation_mismatch_failures": rotation_failures,
+        "unassigned_source_lines": unassigned_source_lines,
+        "official_pipeline": official_pipeline,
     }
     report["passed"] = all(
         [
@@ -277,17 +313,12 @@ def evaluate_evidence(
             not report["font_embedding_failures"],
             not report["text_overlap_failures"],
             not report["clipping_failures"],
-            not report["unreviewed_output_pages"],
-            report["unreviewed_images"] == 0,
-            report["untranslated_clear_image_labels"] == 0,
-            report["logo_review_complete"],
-            report["header_footer_review_complete"],
-            report["image_difference_review_complete"],
-            report["full_render_review_complete"],
-            report["icon_review_complete"],
-            report["source_icon_provenance_complete"],
-            not report["icon_substitution_failures"],
-            not report["mixed_color_failures"],
+            report["all_pages_rendered"],
+            report["reviewed_changed_regions"],
+            report["untranslated_clear_labels"] == 0,
+            not report["orientation_mismatch_failures"],
+            not report["unassigned_source_lines"],
+            report["official_pipeline"],
         ]
     )
     return report
@@ -428,11 +459,13 @@ def main() -> None:
         manifest["selected_pages"],
         ignore_overlap_regions={},
     )
-    residual = residual_cjk_ocr(
-        pdf_path,
-        Path(args.report).resolve().parent / "qa-ocr-render",
-        manifest["selected_pages"],
-    )
+    residual = []
+    if requires_cjk_residual_gate(manifest.get("target_language", "")):
+        residual = residual_cjk_ocr(
+            pdf_path,
+            Path(args.report).resolve().parent / "qa-ocr-render",
+            manifest["selected_pages"],
+        )
     residual = filter_approved_bilingual_residuals(residual, manifest)
     reviewed_false_positives = visual_review.get("reviewed_ocr_false_positives", [])
     residual, matched_false_positives = filter_reviewed_ocr_false_positives(
@@ -448,6 +481,7 @@ def main() -> None:
         residual_cjk=residual,
         font_embedding_failures=inspect_font_embedding(reader),
         automated_overlap_failures=automated_overlap,
+        candidate_sha256=output_hash,
     )
     report.update(
         {

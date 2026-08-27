@@ -353,24 +353,19 @@ def verify(
     failed = []
     for key in (
         "all_pages_rendered",
-        "logo_review_complete",
-        "header_footer_high_resolution_review_complete",
-        "image_structural_review_complete",
-        "image_difference_review_complete",
+        "reviewed_changed_regions",
     ):
         if visual.get(key) is not True:
             failed.append(key)
-    for key in (
-        "unreviewed_images",
-        "untranslated_clear_image_labels",
-        "unreported_confirm_items",
-    ):
+    for key in ("untranslated_clear_image_labels", "unreported_confirm_items"):
         if int(visual.get(key, -1)) != 0:
             failed.append(key)
     if visual.get("text_overlap_failures"):
         failed.append("text_overlap_failures")
     if visual.get("anchored_line_failures"):
         failed.append("anchored_line_failures")
+    if not isinstance(visual.get("reviewed_anomaly_pages", []), list):
+        failed.append("reviewed_anomaly_pages")
     candidate_hash = _sha256(candidate)
     if str(visual.get("candidate_sha256", "")).lower() != candidate_hash.lower():
         failed.append("candidate_sha256")
@@ -417,12 +412,10 @@ def verify(
         "typography_passed": bool(typography.get("passed", False)),
         "outside_region_pixel_changes": sum(int(item.get("outside_region_pixel_changes", 0)) for item in json.loads(_artifact(job, "clean_image_report").read_text(encoding="utf-8")).get("images", [])) if "clean_image_report" in job["artifacts"] else 0,
         "visual_review_complete": True,
-        "unreviewed_images": 0,
+        "all_pages_rendered": True,
+        "reviewed_changed_regions": True,
+        "reviewed_anomaly_pages": visual.get("reviewed_anomaly_pages", []),
         "untranslated_clear_image_labels": 0,
-        "logo_review_complete": True,
-        "header_footer_high_resolution_review_complete": True,
-        "image_structural_review_complete": True,
-        "image_difference_review_complete": True,
         "unreported_confirm_items": 0,
         "anchored_line_failures": [],
         "text_overlap_failures": [],

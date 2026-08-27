@@ -72,7 +72,12 @@ SHA-256, and alt description in the build report.
 
 ## 5. Review and verify
 
-Render the output at 200 DPI for full-page inspection and at 400 DPI for text-adjacent structure, logos, tables, headers, footers, icons, and mixed-color instructions. Compare source/output crops for every translated block. Confirm each `source_crop` against its build-report provenance and verify that no pictogram became text or a similar substitute. Create `visual-review.json` using the contract in `quality-gates.md`.
+Render the final output once at the normal verification resolution. Run
+automatic checks across every page. Inspect at high zoom only changed regions,
+`source_crop` restorations, and pages or regions flagged as anomalies. Do not
+create routine page-by-page screenshots or re-review unchanged logos, tables,
+headers, footers, and icons. Create `visual-review.json` using the contract in
+`quality-gates.md`.
 
 ```powershell
 python scripts/verify_scan.py --source "input.pdf" --manifest "job/manifest/translation-manifest.json" --pdf "job/output/translated.pdf" --visual-review "job/review/visual-review.json" --report "job/qa/final-qa.json"

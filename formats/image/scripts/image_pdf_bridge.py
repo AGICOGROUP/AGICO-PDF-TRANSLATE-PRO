@@ -105,6 +105,15 @@ def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path) -> Non
     output_format = expected_format(output_image)
     if output_format != metadata.get("format"):
         raise BridgeError("Output must use the same image format as the source")
+    build_report_path = translated_pdf.with_suffix(".build-report.json")
+    if not build_report_path.is_file():
+        raise BridgeError("Official scan build report is required before image unwrap")
+    build_report = json.loads(build_report_path.read_text(encoding="utf-8"))
+    if (
+        build_report.get("builder") != "translate-scan-pdf-professionally"
+        or str(build_report.get("output_sha256", "")).lower() != sha256_file(translated_pdf).lower()
+    ):
+        raise BridgeError("Official scan build report does not match translated PDF")
 
     output_image.parent.mkdir(parents=True, exist_ok=True)
     render_prefix = output_image.parent / f".{output_image.stem}-render"

@@ -22,6 +22,7 @@ Each translation record:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -82,6 +83,7 @@ def place_translation(
     align: str = "left",
     fontname: str = DEFAULT_FONT_NAME,
     fontfile: str = DEFAULT_FONT_PATH,
+    rotation: int = 0,
 ) -> float:
     """Place one translation block on the page. Returns total height used."""
     if not text:
@@ -114,6 +116,7 @@ def place_translation(
             fontsize=fontsize,
             color=color,
             overlay=True,
+            rotate=rotation,
         )
 
     return total_height
@@ -157,6 +160,20 @@ def main() -> int:
     if not isinstance(records, list):
         print("Error: translations file must be a JSON array", file=sys.stderr)
         return 2
+    seen_ids: set[str] = set()
+    for record in records:
+        record_id = str(record.get("id", "")).strip()
+        if not record_id or not str(record.get("source", "")).strip():
+            print("Error: every translation requires a source and unique id", file=sys.stderr)
+            return 2
+        if record_id in seen_ids:
+            print("Error: every translation requires a unique id", file=sys.stderr)
+            return 2
+        seen_ids.add(record_id)
+        rotation = int(record.get("rotation", 0)) % 360
+        if rotation not in (0, 90, 180, 270):
+            print("Error: rotation must be 0, 90, 180, or 270", file=sys.stderr)
+            return 2
 
     # Group records by page for efficient processing
     by_page: dict[int, list[dict]] = {}
@@ -196,12 +213,28 @@ def main() -> int:
                 align=rec.get("align", "left"),
                 fontname=fontname,
                 fontfile=fontfile,
+                rotation=int(rec.get("rotation", 0)) % 360,
             )
 
     page_count = doc.page_count
     args.output.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(args.output), deflate=True, garbage=4)
     doc.close()
+
+    def digest(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    build_report = {
+        "builder": "translate-pdf-bilingual-overlay",
+        "source_sha256": digest(args.source),
+        "translations_sha256": digest(args.translations),
+        "output_sha256": digest(args.output),
+        "mapped_source_count": len(seen_ids),
+        "rendered_translation_count": sum(bool(str(item.get("translation", "")).strip()) for item in records),
+    }
+    args.output.with_suffix(".build-report.json").write_text(
+        json.dumps(build_report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     size_kb = args.output.stat().st_size / 1024
     print(f"Bilingual PDF generated: {args.output}")
