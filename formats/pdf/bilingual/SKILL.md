@@ -21,8 +21,10 @@ available whitespace. This is fundamentally different from replacement
 translation: nothing in the source is removed, overwritten, or flattened.
 
 Use this skill when the user explicitly wants both languages visible or when
-the PDF router classifies the file as an engineering drawing. Drawings default
-to bilingual overlay even when the request only says “翻译为中文版/英文版”.
+the PDF router classifies the file as an engineering drawing in `auto` mode.
+Drawings default to bilingual overlay for ordinary wording such as
+“翻译为中文版/英文版”. An explicit request to remove or replace the source text
+takes precedence: native/mixed drawings then use `formats/pdf/native-cad/SKILL.md`.
 
 Before translation, inventory every clear Chinese and foreign label and run
 `python ../scripts/decide_drawing_translation.py --inventory-file
@@ -36,7 +38,8 @@ the workflow starts.
 
 | User intent | Adapter |
 |---|---|
-| Replace source text with translation | `formats/pdf/native/SKILL.md` or `formats/pdf/scan/SKILL.md` |
+| Replace source text in an ordinary PDF | `formats/pdf/native/SKILL.md` or `formats/pdf/scan/SKILL.md` |
+| Replace source text in a native/mixed engineering drawing | `formats/pdf/native-cad/SKILL.md` |
 | Keep source text, add translation beside it | **this skill** |
 | Engineering drawing, ordinary translation wording | **this skill** |
 | Complete Chinese + one-foreign-language drawing | Preserve source; mark complete |

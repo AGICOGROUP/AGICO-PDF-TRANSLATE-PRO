@@ -8,6 +8,12 @@ nonzero rotation may not be omitted or changed. In a `blank_panel`, one
 translation maps to exactly one source-line ID. Summary text cannot satisfy
 several source labels.
 
+The final-gate word-overlap check reads rotated replacement blocks as
+full-column boxes. Keep each rotated block's `max_font` at or below the
+horizontal gap between its box and the nearest other rotated block on the same
+page; tighter spacing is reported as a word-overlap failure even when nothing
+visually collides.
+
 `below` and `right` placements must remain within 3% of the page diagonal from
 their source anchor. A `blank_panel` additionally requires
 `companion_kind: table|title_block|legend` and a four-value
@@ -122,6 +128,11 @@ of a broad union `clean_box`:
 must contain four coordinates and tightly cover source glyphs only. The builder
 uses their union solely as approved pixel-change evidence; intervening rules,
 leaders, signatures, and whitespace remain untouched.
+
+A single-line block whose source box is too thin to hold the role's minimum
+font (usable height `(box_height_px + 2) × 72 / dpi − 2` under ~5.75 pt) fails
+the build. Widen the cleanup geometry across surrounding whitespace or merge
+the line into an adjacent block of the same role so the text area gains height.
 
 `preserve_confirm` blocks must use `action: preserve`, keep a nonblank `source`, and state the reason in `translation` (for example `Trademark; preserve exactly`). A manifest is invalid if any source-line ID is missing, duplicated, or assigned to an unknown block.
 

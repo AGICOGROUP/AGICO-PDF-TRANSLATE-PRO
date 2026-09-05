@@ -1,4 +1,4 @@
 interface:
   display_name: "Professional PDF Translator"
   short_description: "Translate PDFs with selectable text and mandatory visual QA"
-  default_prompt: "Use $translate-pdf-professionally to route engineering drawings to automatic bilingual overlay; otherwise translate this native/mixed PDF professionally, preserve selectability, apply image-method routing with structural-line evidence, and pass all visual gates."
+  default_prompt: "Use $translate-pdf-professionally to route engineering drawings to automatic bilingual overlay by default or native-CAD when I explicitly require source text replacement; otherwise translate this native/mixed PDF professionally, preserve selectability, apply image-method routing with structural-line evidence, and pass all visual gates."

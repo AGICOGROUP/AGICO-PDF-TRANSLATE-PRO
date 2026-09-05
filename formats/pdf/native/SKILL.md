@@ -7,9 +7,15 @@ description: Use when translating native-text or mixed native/raster technical P
 
 ## Engineering-drawing route override
 
-Before using replacement mode, run the PDF router. If it reports
-`document_kind: engineering-drawing`, do not rebuild or replace source text.
-Use the bilingual overlay adapter and its automatic language-inventory decision.
+Before using replacement mode, run the PDF router with the output mode. If it
+reports `document_kind: engineering-drawing`, follow the returned adapter:
+
+- `auto` or `bilingual` uses the bilingual overlay adapter and its automatic
+  language-inventory decision;
+- explicit `replace` uses `formats/pdf/native-cad/SKILL.md`.
+
+Do not rebuild an engineering drawing with this ordinary native-document
+adapter.
 If the drawing is already a complete Chinese-plus-one-foreign-language version,
 preserve the exact source PDF and mark it completed. Otherwise add selectable
 target text while preserving the source. Do not pause for language confirmation

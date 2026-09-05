@@ -14,12 +14,18 @@ from reportlab.pdfgen import canvas
 ROOT = Path(__file__).resolve().parents[3]
 ROUTER = ROOT / "formats" / "pdf" / "scripts" / "route_pdf_file.py"
 BILINGUAL_ADAPTER = "formats/pdf/bilingual/SKILL.md"
+NATIVE_CAD_ADAPTER = "formats/pdf/native-cad/SKILL.md"
 
 
 class PdfRouterContractTests(unittest.TestCase):
-    def run_router(self, source: Path) -> subprocess.CompletedProcess[str]:
+    def run_router(
+        self, source: Path, mode: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, str(ROUTER), str(source)]
+        if mode is not None:
+            command.extend(["--mode", mode])
         return subprocess.run(
-            [sys.executable, str(ROUTER), str(source)],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -82,6 +88,59 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual(BILINGUAL_ADAPTER, report["adapter"])
             self.assertEqual("add_bilingual", report["translation_mode"])
             self.assertEqual("inspect_bilingual_coverage", report["next_action"])
+
+    def test_explicit_replace_routes_native_engineering_drawing_to_native_cad(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_large_drawing_pdf(
+                Path(directory) / "drawing.pdf", "SECTION A-A"
+            )
+            result = self.run_router(source, mode="replace")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("native-text", report["pdf_type"])
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
+            self.assertEqual("replace", report["translation_mode"])
+            self.assertEqual("translate", report["next_action"])
+
+    def test_explicit_replace_routes_mixed_engineering_drawing_to_native_cad(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            text_page = self.make_large_drawing_pdf(root / "text.pdf", "SECTION A-A")
+            blank_page = self.make_large_drawing_pdf(root / "blank.pdf")
+            writer = PdfWriter()
+            writer.add_page(PdfReader(text_page).pages[0])
+            writer.add_page(PdfReader(blank_page).pages[0])
+            source = root / "mixed-drawing.pdf"
+            with source.open("wb") as stream:
+                writer.write(stream)
+
+            result = self.run_router(source, mode="replace")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("mixed", report["pdf_type"])
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
+
+    def test_explicit_bilingual_routes_normal_native_pdf_to_bilingual(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_text_pdf(Path(directory) / "report.pdf", "Report body")
+            result = self.run_router(source, mode="bilingual")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("document", report["document_kind"])
+            self.assertEqual(BILINGUAL_ADAPTER, report["adapter"])
+            self.assertEqual("add_bilingual", report["translation_mode"])
+
+    def test_scan_only_pdf_never_routes_to_native_cad(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_large_drawing_pdf(Path(directory) / "drawing.pdf")
+            result = self.run_router(source, mode="replace")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("scan-only", report["pdf_type"])
+            self.assertEqual("formats/pdf/scan/SKILL.md", report["adapter"])
+            self.assertEqual("replace", report["translation_mode"])
 
     def test_routes_large_scan_engineering_drawing_to_scan_additive_mode(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -62,3 +62,13 @@ The verifier must bind review evidence to the exact candidate SHA-256. Any
 output change invalidates the evidence. One gate may aggregate several cheap
 automatic assertions; it must not trigger another adapter's workflow or a
 second full-document render.
+
+## Source-language residue scan for CJK targets
+
+`zh`, `ja`, and `ko` targets skip the automatic CJK-residue gate because the
+target itself is CJK. Replacement jobs in these languages must instead evidence
+source-language residue directly: OCR the pages of the one final render (150
+DPI, 1x pass) and require zero unexplained source-language words outside boxes
+assigned to `preserve` or validated `bilingual_complete` blocks. Record the
+scan result in the QA report; budget roughly 8–15 seconds of OCR per page and
+use the existing final render — never a second full-document render.

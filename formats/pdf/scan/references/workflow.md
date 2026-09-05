@@ -18,6 +18,15 @@ python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json"
 
 Use both 1x and 3x OCR results merged by geometry. Visually compare the 400-DPI render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
 
+OCR recognizes only cardinal orientations (0/90/180/270). Diagonally rotated
+labels — chart annotations such as RECHAZAR/ACEPTAR on Wald diagrams, slope
+text along inclined leaders — are silently missed by extraction and by any
+later OCR-based residue scan. Visually inspect every chart/diagram region of
+the 400-DPI render for such labels; add each miss to `source_lines` as a
+manually measured line (new stable ID, tight box, nearest cardinal rotation)
+and assign it to a translated block. Budget roughly 1–2 minutes of inspection
+per page containing charts or inclined annotations.
+
 Use the draft groups to translate prose with the complete ordered page as
 context and return one translation per region ID. A normal prose page should
 contain a small number of coherent regions, not one output block per OCR line.
@@ -47,6 +56,7 @@ The default is tight glyph-only cleanup:
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
 - Photographs/UI/screenshots: do not synthesize unknown background. If text sits on a nonuniform texture and a clean removal cannot be proved, perform pixel-local clone/inpaint outside these generic scripts, then verify the protected structure at high zoom.
 - Logos: translate the readable wording while preserving artwork. A trademark or brand name may use `preserve_confirm` when translation would be incorrect.
+- Chart and hatched-grid labels (Wald diagrams, engineering chart boxes): clean with a solid white background (`background: [255, 255, 255]`) matching the original label box instead of a sampled color. Sampled medians on hatched patterns fill the clean box dark and hide the replacement text.
 
 ### Icon routing and mixed-color text
 
@@ -83,6 +93,12 @@ must be verified uniform background and both old and new boxes become approved
 difference regions.
 
 ## 4. Build
+
+Validate the manifest contract before building and fix every reported error first (a failed build discards minutes of raster work):
+
+```powershell
+python -c "import json, sys; sys.path.insert(0, 'scripts'); from contracts import validate_manifest; print(validate_manifest(json.load(open('job/manifest/translation-manifest.json', encoding='utf-8'))))"
+```
 
 ```powershell
 python scripts/build_scan.py --manifest "job/manifest/translation-manifest.json" --output "job/output/translated.pdf"
