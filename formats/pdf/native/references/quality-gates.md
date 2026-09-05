@@ -5,6 +5,11 @@ scan-PDF or standalone-image gates.
 
 1. Translation integrity: 100% manifest coverage, consistent glossary terms,
    preserved numbers/models/units, and zero unexpected source-language residue.
+   Require a completed semantic accuracy review for every selected source page
+   under `../../../../references/page-context-translation-review.md`, including
+   native and embedded-image text. Save `translation-review.json` with current
+   source/candidate hashes and no unresolved issues. Automated coverage alone
+   does not prove accuracy.
 2. Text validity: translated text is selectable/copyable, fonts are embedded,
    native pages are not flattened, and hidden source text is absent.
 3. Document integrity: page count, boxes, rotation, reading order, tables,

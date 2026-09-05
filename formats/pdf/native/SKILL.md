@@ -7,9 +7,15 @@ description: Use when translating native-text or mixed native/raster technical P
 
 ## Engineering-drawing route override
 
-Before using replacement mode, run the PDF router. If it reports
-`document_kind: engineering-drawing`, do not rebuild or replace source text.
-Use the bilingual overlay adapter and its automatic language-inventory decision.
+Before using replacement mode, run the PDF router with the output mode. If it
+reports `document_kind: engineering-drawing`, follow the returned adapter:
+
+- `auto` or `bilingual` uses the bilingual overlay adapter and its automatic
+  language-inventory decision;
+- explicit `replace` uses `formats/pdf/native-cad/SKILL.md`.
+
+Do not rebuild an engineering drawing with this ordinary native-document
+adapter.
 If the drawing is already a complete Chinese-plus-one-foreign-language version,
 preserve the exact source PDF and mark it completed. Otherwise add selectable
 target text while preserving the source. Do not pause for language confirmation
@@ -73,6 +79,8 @@ the scan or standalone-image gate set.
 1. Translation integrity: complete coverage, consistent terminology, preserved
    numbers/models/units, zero unexpected source-language residue, and
    `untranslated_clear_image_labels: 0` when embedded image text exists.
+   Require a separate whole-page contextual accuracy review for every selected
+   page, with current `translation-review.json` evidence and no unresolved issues.
 2. Text validity: translated text is selectable/copyable, fonts are embedded,
    native pages are not flattened, and no hidden source text survives.
 3. Document integrity: page count, boxes, rotation, reading order, tables,
@@ -87,6 +95,10 @@ the scan or standalone-image gate set.
    evidence as `reviewed_changed_regions` and `reviewed_anomaly_pages`.
 
 ## Workflow
+
+Read and follow [page-context translation and accuracy review](../../../references/page-context-translation-review.md).
+This includes every selected page and its embedded-image labels, independently
+of whether a page is flagged for a layout anomaly.
 
 ### 1. Inspect and classify
 
@@ -144,6 +156,10 @@ python scripts/glossary_lookup.py scan "<Chinese source block or batch>"
   headers/footers, and translated labels inside images.
 - Preserve paragraph, list, table-cell, symbol, and line-break semantics.
 - Translate by engineering context.
+- Read the complete ordered page before translating blocks. Include native
+  text, tables, captions, and embedded-image labels in the same context; carry
+  that context into compact translation batches and consult adjacent pages for
+  continuations. Do not translate isolated extraction fragments without context.
 - Resume from the first incomplete block; do not restart completed batches.
 
 ### 5. Rebuild native/selectable text
@@ -297,6 +313,13 @@ Also require:
 - clean image pixels embedded in the PDF match generated clean images.
 
 ### 9. Final render and exception review
+
+- Perform a separate page-by-page source-to-target accuracy review of every
+  selected page using the shared reference. Check meaning, context, omissions,
+  terminology, and values against the original and final candidate. Save
+  `translation-review.json` bound to the final PDF hash and resolve all findings.
+  The selective visual inspection below limits layout work only; it does not
+  limit semantic review to anomaly pages.
 
 - Render the final PDF once and run automated checks across all pages.
 - Manually inspect changed image/text regions and pages flagged by automated

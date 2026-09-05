@@ -14,6 +14,7 @@ from pypdf.errors import PdfReadError
 
 PDF_SIGNATURE = b"%PDF-"
 NATIVE_ADAPTER = "formats/pdf/native/SKILL.md"
+NATIVE_CAD_ADAPTER = "formats/pdf/native-cad/SKILL.md"
 SCAN_ADAPTER = "formats/pdf/scan/SKILL.md"
 BILINGUAL_ADAPTER = "formats/pdf/bilingual/SKILL.md"
 
@@ -82,7 +83,7 @@ def classify_document_kind(
     return "document", []
 
 
-def route(source: Path) -> tuple[int, dict[str, object]]:
+def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
     if not source.is_file():
         return 2, report(error="source file not found")
 
@@ -124,6 +125,15 @@ def route(source: Path) -> tuple[int, dict[str, object]]:
     document_kind, drawing_evidence = classify_document_kind(page_sizes, counts)
     drawing = document_kind == "engineering-drawing"
     if native_text_pages == 0:
+        translation_mode = (
+            "add_bilingual" if mode == "bilingual" or (drawing and mode == "auto")
+            else "replace"
+        )
+        next_action = (
+            "inspect_bilingual_coverage"
+            if drawing and translation_mode == "add_bilingual"
+            else "translate"
+        )
         if rotated:
             return 2, report(
                 pdf_type="scan-only",
@@ -131,8 +141,8 @@ def route(source: Path) -> tuple[int, dict[str, object]]:
                 native_char_counts=counts,
                 rotated_pages=rotated,
                 document_kind=document_kind,
-                translation_mode="add_bilingual" if drawing else "replace",
-                next_action="inspect_bilingual_coverage" if drawing else "translate",
+                translation_mode=translation_mode,
+                next_action=next_action,
                 drawing_evidence=drawing_evidence,
                 error="normalize rotated scan pages before translation routing",
             )
@@ -142,22 +152,35 @@ def route(source: Path) -> tuple[int, dict[str, object]]:
             page_count=page_count,
             native_char_counts=counts,
             document_kind=document_kind,
-            translation_mode="add_bilingual" if drawing else "replace",
-            next_action="inspect_bilingual_coverage" if drawing else "translate",
+            translation_mode=translation_mode,
+            next_action=next_action,
             drawing_evidence=drawing_evidence,
         )
 
     pdf_type = "native-text" if native_text_pages == page_count else "mixed"
+    if mode == "bilingual" or (drawing and mode == "auto"):
+        adapter = BILINGUAL_ADAPTER
+        translation_mode = "add_bilingual"
+    elif drawing:
+        adapter = NATIVE_CAD_ADAPTER
+        translation_mode = "replace"
+    else:
+        adapter = NATIVE_ADAPTER
+        translation_mode = "replace"
     return 0, report(
         pdf_type=pdf_type,
-        adapter=BILINGUAL_ADAPTER if drawing else NATIVE_ADAPTER,
+        adapter=adapter,
         page_count=page_count,
         native_text_pages=native_text_pages,
         native_char_counts=counts,
         rotated_pages=rotated,
         document_kind=document_kind,
-        translation_mode="add_bilingual" if drawing else "replace",
-        next_action="inspect_bilingual_coverage" if drawing else "translate",
+        translation_mode=translation_mode,
+        next_action=(
+            "inspect_bilingual_coverage"
+            if drawing and translation_mode == "add_bilingual"
+            else "translate"
+        ),
         drawing_evidence=drawing_evidence,
     )
 
@@ -167,8 +190,14 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
+    parser.add_argument(
+        "--mode",
+        choices=("auto", "replace", "bilingual"),
+        default="auto",
+        help="output mode; engineering drawings default to bilingual in auto mode",
+    )
     args = parser.parse_args()
-    exit_code, result = route(args.source)
+    exit_code, result = route(args.source, mode=args.mode)
     print(json.dumps(result, ensure_ascii=False))
     return exit_code
 

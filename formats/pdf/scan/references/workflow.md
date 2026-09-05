@@ -11,13 +11,35 @@ Work from the original PDF. Create `<work>/<stem>-<sha8>/` with `extract/`, `man
 python scripts/classify_pdf.py --source "input.pdf"
 python scripts/extract_scan.py --source "input.pdf" --pages all --output "job/extract" --dpi 400
 python scripts/make_manifest_template.py --extraction "job/extract/extraction-report.json" --output "job/manifest/translation-manifest.json"
+python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json" --output "job/manifest/draft-groups.json"
 ```
 
 ## 2. OCR inventory and translation
 
 Use both 1x and 3x OCR results merged by geometry. Visually compare the 400-DPI render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
 
-Group OCR lines into semantic blocks before translation. Preserve numbers, units, model names, standards, URLs, emails, and trademarks exactly unless localization is explicitly required. Build a document-level glossary before translating repeated technical terms. Translate meaning, not OCR noise.
+OCR recognizes only cardinal orientations (0/90/180/270). Diagonally rotated
+labels — chart annotations such as RECHAZAR/ACEPTAR on Wald diagrams, slope
+text along inclined leaders — are silently missed by extraction and by any
+later OCR-based residue scan. Visually inspect every chart/diagram region of
+the 400-DPI render for such labels; add each miss to `source_lines` as a
+manually measured line (new stable ID, tight box, nearest cardinal rotation)
+and assign it to a translated block. Budget roughly 1–2 minutes of inspection
+per page containing charts or inclined annotations.
+
+Use the draft groups to translate prose with the complete ordered page as
+context and return one translation per region ID. A normal prose page should
+contain a small number of coherent regions, not one output block per OCR line.
+Keep table cells, drawing labels, rotations, headers, and footers separate when
+their structure requires it. Preserve numbers, units, model names, standards,
+URLs, emails, and trademarks exactly unless localization is explicitly required.
+Build a document-level glossary before translating repeated technical terms.
+Translate meaning, not OCR noise.
+
+Follow `../../../../references/page-context-translation-review.md`: reconstruct
+split sentences, use the whole page and glossary in every translation batch,
+and confirm OCR corrections against the source pixels. Adjacent pages provide
+context when content continues across a page boundary.
 
 Before translating a diagram, inventory all clear Chinese labels and their
 nearby target-language counterparts. Preserve the diagram as `bilingual_complete` only
@@ -34,6 +56,7 @@ The default is tight glyph-only cleanup:
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
 - Photographs/UI/screenshots: do not synthesize unknown background. If text sits on a nonuniform texture and a clean removal cannot be proved, perform pixel-local clone/inpaint outside these generic scripts, then verify the protected structure at high zoom.
 - Logos: translate the readable wording while preserving artwork. A trademark or brand name may use `preserve_confirm` when translation would be incorrect.
+- Chart and hatched-grid labels (Wald diagrams, engineering chart boxes): clean with a solid white background (`background: [255, 255, 255]`) matching the original label box instead of a sampled color. Sampled medians on hatched patterns fill the clean box dark and hide the replacement text.
 
 ### Icon routing and mixed-color text
 
@@ -46,18 +69,36 @@ Classify each icon before cleanup:
 Do not replace a source icon with Unicode, a font glyph, explanatory text, or a similar icon from another library. For lines containing orange commands, blue links, warnings, or other meaningful color changes, use `rich_lines` text runs and preserve each run's RGB color. The concatenated text runs must equal the block `translation`; source-crop runs do not add text.
 
 The `box` is the target-language text area. In replacement mode, `clean_box` is
-the source-glyph removal area; they are intentionally separate. Never enlarge
-`clean_box` merely because the translation is longer. In additive bilingual
+one source-glyph removal area and `clean_boxes` is the list of glyph envelopes
+for a multi-line region; define exactly one form. They are intentionally
+separate from the region union. Never enlarge cleanup geometry merely because
+the translation is longer. In additive bilingual
 mode, omit `clean_box` and place `box` below, right, or in a verified blank panel.
 
-Plan `major_title`, `minor_title`, and `body` typography once per page. Use one
-font, size, and weight for each group. If target text still cannot fit at the
+Plan `major_title`, `minor_title`, `body`, `annotation`, `table`, `header`, and
+`footer` typography once per page. Use one font, size, weight, and leading ratio
+for each group. Treat `caption` as `annotation`; drawing labels and callouts that
+serve the same semantic function must also use the annotation group. Classify by
+semantic function and source hierarchy, not OCR-box height alone. Titles are
+normally bold or larger, body is regular and dominant, and annotation is regular
+and smaller. When all three occur, preserve `title > body > annotation`.
+
+Fit groups independently. If one body region needs a smaller size, reduce every
+body region on that page to the same largest common fitting size. A caption,
+drawing label, header, footer, or table cell must never lower the common body
+size. If target text still cannot fit at the
 readable floor, record the fit failure before using a page `layout_adjustment`.
 Try shifting a large image first, then proportional shrink. The old image area
 must be verified uniform background and both old and new boxes become approved
 difference regions.
 
 ## 4. Build
+
+Validate the manifest contract before building and fix every reported error first (a failed build discards minutes of raster work):
+
+```powershell
+python -c "import json, sys; sys.path.insert(0, 'scripts'); from contracts import validate_manifest; print(validate_manifest(json.load(open('job/manifest/translation-manifest.json', encoding='utf-8'))))"
+```
 
 ```powershell
 python scripts/build_scan.py --manifest "job/manifest/translation-manifest.json" --output "job/output/translated.pdf"
@@ -71,6 +112,12 @@ are drawn after the cleaned page image and before target text. For every
 SHA-256, and alt description in the build report.
 
 ## 5. Review and verify
+
+Review semantic accuracy on every selected page against the original page and
+final translation, including text missed by OCR. Save the adapter-owned
+`translation-review.json` as specified in the shared reference. Correct and
+re-review affected pages before delivery. This is part of the existing
+translation-integrity check; the selective visual review below concerns layout.
 
 Render the final output once at the normal verification resolution. Run
 automatic checks across every page. Inspect at high zoom only changed regions,

@@ -35,6 +35,9 @@ processing starts.
 
 Read these files before acting:
 
+- `../../../references/page-context-translation-review.md` for mandatory
+  page-context translation and a separate semantic accuracy review of every page.
+
 - `references/workflow.md` for the complete execution order and image-text handling rules.
 - `references/manifest-schema.md` before creating or editing the translation manifest.
 - `references/quality-gates.md` before review and delivery.
@@ -51,7 +54,11 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    Preserve each OCR quadrilateral and its derived cardinal `rotation`. For
    internally rotated drawings, do not infer text direction from PDF `/Rotate`.
 3. Create a manifest with `scripts/make_manifest_template.py`.
-4. Inventory every OCR line. Group lines into semantic blocks. For each cement
+4. Inventory every OCR line. Run `scripts/draft_blocks.py` to create page-aware
+   semantic regions before translation. Translate with the complete ordered page
+   as context, while returning one translation per region ID. Prose regions may
+   own several source-line IDs; table cells, drawing labels, rotated text,
+   headers, and footers remain structurally separate. For each cement
    block or batch, run `python scripts/glossary_lookup.py scan "<Chinese source>"`.
    For English output, use every returned table translation before model
    wording. For another target language, record the selected English term as a
@@ -61,7 +68,9 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    source-line ID must be assigned exactly once as `translated` or
    `preserve_confirm`.
 5. Select the output mode. For replacement, approve a tight `clean_box` around
-   glyph pixels only. For additive bilingual output, use `action: add_bilingual`
+   glyph pixels only, or `clean_boxes` for the individual glyph envelopes in a
+   multi-line region. Never use the region union as a broad cleanup rectangle.
+   For additive bilingual output, use `action: add_bilingual`
    and verified adjacent whitespace; do not define `clean_box` or alter source
    pixels. Preserve drawing lines crossing or touching text; explicitly
    reconstruct only verified line segments through `vector_lines`. Keep icons
@@ -73,6 +82,10 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
 7. Render the completed PDF once. Run automatic checks on all pages, then
    visually inspect only changed regions and anomaly pages. Complete the
    adapter's own visual-review evidence.
+   Separately compare the complete source and translation on every selected
+   page for contextual accuracy, including OCR omissions. Save the adapter-owned
+   `translation-review.json`; visual sampling and block coverage do not replace
+   this semantic review. Resolve accuracy findings before delivery.
 8. Run `scripts/verify_scan.py`. Deliver only when it exits successfully and its report says `passed: true`.
 
 The official build report and its source/manifest/output hashes are mandatory.
@@ -94,10 +107,23 @@ one-to-one source-label translations with a summary panel.
   clear Chinese label has a semantic target-language counterpart. Record the source
   region hash, clear-Chinese count, matched-pair count, and zero unmatched
   labels. Partial bilingual diagrams translate only unmatched Chinese labels.
-- Within one page, `major_title`, `minor_title`, and `body` each use one font,
-  size, and weight derived from the source. Plan the whole group before drawing.
-  If one body block cannot fit, reduce every body block on that page to the same
-  fitting size; do not shrink only the dense paragraph.
+- Classify visible text into three primary typography tiers before fitting:
+  `major_title`/`minor_title` for headings, `body` for the main prose, and
+  `annotation` for captions, drawing labels, callouts, and other less frequent
+  small text. Headers, footers, and table text remain independent structural
+  groups. Do not classify an item as `annotation` merely because its OCR box is
+  short or narrow; use its semantic function and the source page's visual
+  hierarchy.
+- Within one page, each typography group uses one font, size, and weight derived
+  from the source. Titles are normally bold or one size larger than body text;
+  body text uses regular weight and the page's dominant readable size;
+  annotations use regular weight and a smaller size. Keep the ordering
+  `title > body > annotation` whenever all three occur on the page.
+- Fit and reduce each group independently. If one body block cannot fit, reduce
+  every body block on that page to the same fitting size, but never let a small
+  annotation, caption, drawing label, header, footer, or table cell reduce the
+  body size. Likewise, a dense body paragraph must not reduce title or
+  annotation sizes.
 - Preserve image placement first. Only after a recorded text-fit failure may a
   text-free large image shift or shrink proportionally into verified whitespace.
   A shift reuses exact pixels; a shrink may only resample the original crop

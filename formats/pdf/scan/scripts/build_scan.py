@@ -37,8 +37,16 @@ def typography_group(role: str) -> str:
         return "major_title"
     if value in {"subtitle", "heading", "subheading", "heading_2", "heading_3", "warning_title"}:
         return "minor_title"
-    if value in {"body", "list_item", "warning_body", "caption"}:
+    if value in {"body", "list_item", "warning_body"}:
         return "body"
+    if value in {"table_header", "table_cell"}:
+        return "table"
+    if value == "header":
+        return "header"
+    if value == "footer":
+        return "footer"
+    if value == "caption":
+        return "annotation"
     return "special"
 
 
@@ -121,11 +129,13 @@ def clean_background(original: Image.Image, blocks: list[dict]) -> tuple[Image.I
     for block in blocks:
         if block.get("action") != "replace":
             continue
-        box = _clamp_box(block["clean_box"], cleaned.width, cleaned.height)
-        approved_draw.rectangle(box, fill=1)
-        background = block.get("background", "sample")
-        color = _sample_background(source, box) if background == "sample" else tuple(background)
-        draw.rectangle(box, fill=color)
+        cleanup_boxes = block.get("clean_boxes") or [block["clean_box"]]
+        for cleanup_box in cleanup_boxes:
+            box = _clamp_box(cleanup_box, cleaned.width, cleaned.height)
+            approved_draw.rectangle(box, fill=1)
+            background = block.get("background", "sample")
+            color = _sample_background(source, box) if background == "sample" else tuple(background)
+            draw.rectangle(box, fill=color)
     changed = np.any(np.asarray(ImageChops.difference(source, cleaned).convert("RGB")) != 0, axis=2)
     outside = changed & ~np.asarray(approved, dtype=bool)
     return cleaned, {
@@ -373,11 +383,19 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
                     width, height, float(block.get("leading_ratio", 1.16)),
                 ).font_size
             fitted_sizes.append(float(fitted_size))
-        target_size = min(fitted_sizes)
+        requested_size = float(evidence[group]["font_size"])
+        common_size = min(fitted_sizes)
         for block in members:
-            block["max_font"] = target_size
-            block["min_font"] = target_size
-        evidence[group]["font_size"] = target_size
+            block["max_font"] = common_size
+            block["min_font"] = common_size
+            block["leading_ratio"] = float(block.get("leading_ratio", 1.16))
+        evidence[group]["font_size"] = common_size
+        evidence[group]["requested_font_size"] = requested_size
+        evidence[group]["fit_constraints"] = [
+            {"block_id": block.get("id", ""), "maximum_fitting_size": fitted_size}
+            for block, fitted_size in zip(members, fitted_sizes)
+            if fitted_size < requested_size
+        ]
     return evidence
 
 

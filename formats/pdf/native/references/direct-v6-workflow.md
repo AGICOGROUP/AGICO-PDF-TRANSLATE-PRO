@@ -59,6 +59,9 @@ Do not copy the candidate to the delivery directory unless:
 
 - `job.json` says `verified`;
 - `final-qa.json` says `passed: true`;
+- every selected page has completed source-to-target contextual accuracy review
+  under `../../../../references/page-context-translation-review.md`, with a
+  current hash-bound `translation-review.json` and no unresolved issues;
 - the exact candidate was rendered once and every page passed automatic checks;
 - changed regions and anomaly pages were visually inspected;
 - no clear source-language text remains;

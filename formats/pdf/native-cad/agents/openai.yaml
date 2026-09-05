@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native CAD PDF Translator"
+  short_description: "Replace native engineering-drawing text without flattening graphics."
+  default_prompt: "Use $translate-native-cad-pdf when I explicitly require source-text replacement in a native or mixed engineering drawing, preserving vectors, images, geometry, and selectable translated text."

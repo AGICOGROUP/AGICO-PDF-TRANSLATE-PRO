@@ -1,4 +1,4 @@
 interface:
   display_name: "Route PDF Translation"
-  short_description: "Routes reports normally and engineering drawings to automatic bilingual overlay."
-  default_prompt: "Use $route-pdf-translation to inspect my PDF, default engineering drawings to Chinese-plus-foreign bilingual overlay, and skip complete existing bilingual drawings."
+  short_description: "Routes PDFs by content, drawing type, and requested output mode."
+  default_prompt: "Use $route-pdf-translation to inspect my PDF. Default engineering drawings to Chinese-plus-foreign bilingual overlay, but use native-CAD when I explicitly require source text replacement."
