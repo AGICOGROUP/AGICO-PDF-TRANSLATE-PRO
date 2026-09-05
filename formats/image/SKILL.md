@@ -11,6 +11,10 @@ Translate one static PNG or JPEG image. Return the same image format with the sa
 
 ## Required Workflow
 
+Read and follow [page-context translation and accuracy review](../../references/page-context-translation-review.md).
+Treat the entire image as one page: use all its text and visual relationships
+as translation context, then review every translated item against the source.
+
 Reuse scan raster extraction/build utilities where useful, but do not inherit
 the scan PDF acceptance gates. This adapter owns its final checks.
 
@@ -25,6 +29,8 @@ the scan PDF acceptance gates. This adapter owns its final checks.
    official scan builder and its output hash matches `translated.pdf`.
 6. Compare the final image with the original once at full view. Inspect at high
    zoom only changed regions and anomalies reported by automatic checks.
+   Complete the whole-image semantic accuracy review and save the adapter-owned
+   `translation-review.json` against the final image hash before delivery.
 
 ## Final gates
 
@@ -32,6 +38,7 @@ These six gates belong only to the standalone-image adapter.
 
 1. Translation integrity: all readable source text is handled; terminology,
    numbers, models, and units are correct; no unexpected source text remains.
+   Require the whole-image context review with no unresolved accuracy issues.
 2. Raster contract: output format, pixel dimensions, and orientation match the
    normalized source.
 3. Channel integrity: preserve PNG alpha and use high-quality JPEG encoding.

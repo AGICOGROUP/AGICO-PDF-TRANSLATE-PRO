@@ -157,8 +157,19 @@ def validate_manifest(manifest: dict) -> dict:
             raise ManifestError(f"block {block_id} must have a four-value box")
         if block["action"] not in {"replace", "preserve", "add_bilingual"}:
             raise ManifestError(f"block {block_id} has invalid action {block['action']!r}")
-        if block["action"] == "replace" and len(block.get("clean_box", [])) != 4:
-            raise ManifestError(f"block {block_id} must have a four-value clean_box")
+        if block["action"] == "replace":
+            has_single = "clean_box" in block
+            has_multiple = "clean_boxes" in block
+            if has_single == has_multiple:
+                raise ManifestError(f"block {block_id} must define exactly one of clean_box or clean_boxes")
+            if has_single and len(block.get("clean_box", [])) != 4:
+                raise ManifestError(f"block {block_id} must have a four-value clean_box")
+            if has_multiple:
+                clean_boxes = block.get("clean_boxes")
+                if not isinstance(clean_boxes, list) or not clean_boxes or any(
+                    not isinstance(box, list) or len(box) != 4 for box in clean_boxes
+                ):
+                    raise ManifestError(f"block {block_id} clean_boxes must contain four-value boxes")
         if block["status"] == "translated" and block["action"] not in {"replace", "add_bilingual"}:
             raise ManifestError(f"translated block {block_id} must use action 'replace' or 'add_bilingual'")
         if block["action"] == "add_bilingual":
@@ -168,8 +179,8 @@ def validate_manifest(manifest: dict) -> dict:
                 raise ManifestError(
                     f"add_bilingual block {block_id} placement must be below, right, or blank_panel"
                 )
-            if "clean_box" in block:
-                raise ManifestError(f"add_bilingual block {block_id} must not define clean_box")
+            if "clean_box" in block or "clean_boxes" in block:
+                raise ManifestError(f"add_bilingual block {block_id} must not define cleanup boxes")
             if block.get("placement") == "blank_panel" and len(block["source_line_ids"]) != 1:
                 raise ManifestError(
                     f"add_bilingual blank-panel block {block_id} requires one-to-one source-label mapping"

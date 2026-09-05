@@ -12,7 +12,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_scan import apply_page_typography_policy, build_pdf, typography_group
+from build_scan import apply_page_typography_policy, build_pdf, register_fonts, resolve_page_typography, typography_group
 
 
 class PageTypographyPolicyTests(unittest.TestCase):
@@ -20,6 +20,10 @@ class PageTypographyPolicyTests(unittest.TestCase):
         self.assertEqual(typography_group("title"), "major_title")
         self.assertEqual(typography_group("subheading"), "minor_title")
         self.assertEqual(typography_group("list_item"), "body")
+        self.assertEqual(typography_group("caption"), "annotation")
+        self.assertEqual(typography_group("header"), "header")
+        self.assertEqual(typography_group("footer"), "footer")
+        self.assertEqual(typography_group("table_cell"), "table")
 
     def test_page_policy_unifies_each_group(self) -> None:
         blocks = [
@@ -53,8 +57,24 @@ class PageTypographyPolicyTests(unittest.TestCase):
                 "blocks": blocks,
             }
             report = build_pdf(manifest, root / "out.pdf")
-            sizes = {item["font_size"] for item in report["rendered_blocks"]}
-            self.assertEqual(len(sizes), 1)
+            sizes = {item["id"]: item["font_size"] for item in report["rendered_blocks"]}
+            self.assertEqual(sizes["b1"], sizes["b2"])
+            self.assertLess(sizes["b1"], 12)
+
+
+    def test_common_fit_does_not_let_one_body_block_shrink_independently(self) -> None:
+        register_fonts("en")
+        blocks = [
+            {"id": "short", "role": "body", "action": "replace", "translation": "Short text", "box": [20, 20, 380, 80], "max_font": 12, "min_font": 7, "bold": False},
+            {"id": "dense", "role": "list_item", "action": "replace", "translation": "A deliberately dense paragraph that must wrap across several lines and therefore needs a smaller common page body size", "box": [20, 100, 300, 220], "max_font": 12, "min_font": 7, "bold": False},
+            {"id": "footer", "role": "footer", "action": "replace", "translation": "Page 1", "box": [300, 360, 390, 390], "max_font": 5, "min_font": 5, "bold": False},
+        ]
+        page = {"width_pt": 200, "height_pt": 200, "pixel_width": 400, "pixel_height": 400}
+        evidence = resolve_page_typography(blocks, page)
+        self.assertEqual(blocks[0]["max_font"], blocks[1]["max_font"])
+        self.assertEqual(blocks[0]["min_font"], blocks[1]["min_font"])
+        self.assertEqual(evidence["body"]["font_size"], blocks[0]["max_font"])
+        self.assertNotEqual(blocks[2]["max_font"], blocks[0]["max_font"])
 
 
 if __name__ == "__main__":

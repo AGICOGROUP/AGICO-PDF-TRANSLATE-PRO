@@ -37,6 +37,12 @@ has been reviewed. An empty list is valid when there were no anomalies.
 2. Translation integrity: terminology, numbers, models, units, and meaningful
    colors are preserved; replacement mode has zero unexplained source-language
    residue and additive mode has no unmatched clear source label.
+   Require page-by-page semantic accuracy review using
+   `../../../../references/page-context-translation-review.md`. The adapter-owned
+   `translation-review.json` must cover every selected page, bind current source
+   and candidate hashes, and contain no unresolved issues. This agent review
+   includes original source pixels and is not inferred from OCR/block coverage
+   or the automated verifier's passing result.
 3. Text-layer validity: added target text is extractable/selectable, uses
    embedded fonts, and contains no missing glyphs.
 4. Page integrity: page count, order, dimensions, and orientation match the
@@ -44,7 +50,11 @@ has been reviewed. An empty list is valid when there were no anomalies.
 5. Graphic integrity: automatic build evidence reports zero changes outside
    approved regions and exact-source provenance for restored icons/crops.
 6. Layout safety: automatic and exception review reports zero overlap,
-   clipping, below-minimum text, or protected-structure coverage.
+   clipping, below-minimum text, or protected-structure coverage. Page-level
+   typography evidence must show one common fitted size for every title group,
+   one for body, and one for annotation. Tables, headers, and footers use
+   independent groups. When present together, title is larger than body and body
+   is larger than annotation. Annotation fitting must not reduce body size.
 7. Final render: render the completed PDF once, automatically check all pages,
    and manually inspect only changed regions and anomaly pages.
 
