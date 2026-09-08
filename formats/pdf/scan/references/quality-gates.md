@@ -62,3 +62,11 @@ The verifier must bind review evidence to the exact candidate SHA-256. Any
 output change invalidates the evidence. One gate may aggregate several cheap
 automatic assertions; it must not trigger another adapter's workflow or a
 second full-document render.
+
+`verify_scan.py` reads `translation-review.json` beside `--visual-review` by
+default, or accepts `--translation-review <path>`. It checks both hashes, adapter,
+ordered page coverage, exact reviewed source IDs and absence of unresolved issues.
+These checks validate the record, not the truth of a translator's assertions.
+Record actual source-to-target review; generic copied passing entries and hash-only
+updates do not constitute review. Existing completed PDFs must not be retroactively
+described as semantically verified merely because their technical QA passed.

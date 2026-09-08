@@ -51,6 +51,9 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
 1. Classify the source and fingerprint it.
 2. Render every required page at 400 DPI and run dual-scale OCR with
    `scripts/extract_scan.py`; batching page ranges is allowed.
+   Reuse the same extraction directory when resuming. The extractor checkpoints
+   each completed page and validates source/configuration/render hashes before
+   reuse. Do not restart successful pages or manually concatenate batch reports.
    Preserve each OCR quadrilateral and its derived cardinal `rotation`. For
    internally rotated drawings, do not infer text direction from PDF `/Rotate`.
 3. Create a manifest with `scripts/make_manifest_template.py`.
@@ -67,6 +70,11 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    duplicate entries because later table sections contain revisions. Every
    source-line ID must be assigned exactly once as `translated` or
    `preserve_confirm`.
+   Use the draft payload's `pages` context and stable region IDs in each batch.
+   Translate directly from the source language with the available capable model;
+   do not install another machine-translation stack during a document job or
+   substitute isolated phrase/pivot translations for contextual translation.
+   Review technical terms, negation, numbers and units against source pixels.
 5. Select the output mode. For replacement, approve a tight `clean_box` around
    glyph pixels only, or `clean_boxes` for the individual glyph envelopes in a
    multi-line region. Never use the region union as a broad cleanup rectangle.
@@ -87,6 +95,29 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    `translation-review.json`; visual sampling and block coverage do not replace
    this semantic review. Resolve accuracy findings before delivery.
 8. Run `scripts/verify_scan.py`. Deliver only when it exits successfully and its report says `passed: true`.
+   The verifier reads `translation-review.json` beside the visual review, or the
+   explicit `--translation-review` path. Missing, stale, incomplete or unresolved
+   semantic evidence fails verification. A schema-valid review is still not proof
+   of accuracy: never generate passing entries from counts or merely rebind old
+   review hashes after rebuilding.
+
+## Time budget without quality shortcuts
+
+For a 38-page scan job target 60 minutes including OCR, translation, layout,
+semantic review, rendering and delivery. Record actual wall time from task start,
+excluding only explicit user pauses, and each stage's timings. Use the first
+three representative OCR pages to estimate remaining work; report projected
+overruns early. The deadline never authorizes lowering DPI, skipping review,
+preserving readable prose, summarizing, or shrinking body text below readability.
+
+Use one persistent OCR job directory and the builder's hash-validated lossless
+base cache. A wording-only correction reuses its base; cleanup/layout/source
+changes invalidate it. Rebuild through the official builder, re-render affected
+pages and review them, then run final checks against the exact assembled PDF.
+Do not repeat a whole-document render when unaffected page content is unchanged;
+reuse requires evidence of unchanged page content, not just matching page numbers.
+Never run competing OCR jobs for this document, and do not stop other tasks to
+obtain a better benchmark. Report cold and warm measurements separately.
 
 The official build report and its source/manifest/output hashes are mandatory.
 Never deliver output made by a one-off PDF-writing script, and never replace

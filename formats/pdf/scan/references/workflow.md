@@ -18,6 +18,17 @@ python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json"
 
 Use both 1x and 3x OCR results merged by geometry. Visually compare the 400-DPI render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
 
+Each completed page is saved atomically in `extract/page-checkpoints/` before
+the next OCR page begins. Resume with the same command/output directory; valid
+pages are reused, while changed source/configuration/renders are recomputed.
+Use `--no-resume` only for a deliberate cold run. The final extraction report is
+assembled from the requested pages in order, so manual batch merging is unnecessary.
+Per-page progress and report `elapsed_seconds` provide real timing evidence.
+The top-level `elapsed_seconds` is this invocation only. Cached pages retain
+their original processing duration. Neither field includes earlier failed
+attempts, and neither proves total translation time. Keep an independent task
+start timestamp and include retries when assessing the 60-minute target.
+
 Use the draft groups to translate prose with the complete ordered page as
 context and return one translation per region ID. A normal prose page should
 contain a small number of coherent regions, not one output block per OCR line.
@@ -26,6 +37,15 @@ their structure requires it. Preserve numbers, units, model names, standards,
 URLs, emails, and trademarks exactly unless localization is explicitly required.
 Build a document-level glossary before translating repeated technical terms.
 Translate meaning, not OCR noise.
+
+`draft-groups.json` includes stable region IDs and a `pages` array containing
+ordered source IDs, whole-page text and region IDs. Include that page and the
+document glossary with each translation request. Use adjacent page context for
+continuations. Do not translate a global set of unique short strings without
+context: identical wording can have different meanings in different sections.
+Use the available capable model directly; installing a new offline translation
+engine or chaining source-to-English-to-target models is not a time-saving fallback
+for professional translation. Never lower the review standard to meet a deadline.
 
 Follow `../../../../references/page-context-translation-review.md`: reconstruct
 split sentences, use the whole page and glossary in every translation batch,
@@ -94,6 +114,14 @@ changed pixels and requires zero changes outside approved cleanup boxes. A pure
 are drawn after the cleaned page image and before target text. For every
 `source_crop` run it records the source page, source box, output box, pixel
 SHA-256, and alt description in the build report.
+
+The builder samples only the original glyph-border pixels and caches lossless
+clean bases under `output/clean-bases/`. Cache validation includes source-render
+hash, cleanup boxes/colors, raster adjustments and builder implementation hash.
+Changing only wording or fonts reuses the base while rebuilding all target text.
+Do not change cleanup boxes merely to obtain a cache hit. A failed build keeps
+the previous PDF intact; completed output replaces it atomically. The report
+records total/per-page elapsed time and base cache hits.
 
 ## 5. Review and verify
 

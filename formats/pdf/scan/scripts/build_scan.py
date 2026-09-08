@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import math
+import copy
+import time
 from pathlib import Path
 
 import numpy as np
@@ -105,16 +107,16 @@ def _clamp_box(box: list[float], width: int, height: int) -> tuple[int, int, int
 
 
 def _sample_background(image: Image.Image, box: tuple[int, int, int, int]) -> tuple[int, int, int]:
-    array = np.asarray(image.convert("RGB"))
-    height, width, _ = array.shape
+    width, height = image.size
     x0, y0, x1, y1 = box
     outer = (max(0, x0 - 6), max(0, y0 - 6), min(width, x1 + 6), min(height, y1 + 6))
     ox0, oy0, ox1, oy1 = outer
-    samples = []
-    if oy0 < y0: samples.append(array[oy0:y0, ox0:ox1].reshape(-1, 3))
-    if y1 < oy1: samples.append(array[y1:oy1, ox0:ox1].reshape(-1, 3))
-    if ox0 < x0: samples.append(array[y0:y1, ox0:x0].reshape(-1, 3))
-    if x1 < ox1: samples.append(array[y0:y1, x1:ox1].reshape(-1, 3))
+    strips = []
+    if oy0 < y0: strips.append((ox0, oy0, ox1, y0))
+    if y1 < oy1: strips.append((ox0, y1, ox1, oy1))
+    if ox0 < x0: strips.append((ox0, y0, x0, y1))
+    if x1 < ox1: strips.append((x1, y0, ox1, y1))
+    samples = [np.asarray(image.crop(strip).convert("RGB")).reshape(-1, 3) for strip in strips]
     if not samples:
         return 255, 255, 255
     return tuple(int(value) for value in np.median(np.concatenate(samples), axis=0))
@@ -376,12 +378,15 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
             else:
                 default_max, default_min = ROLE_DEFAULTS.get(block["role"], (9, 6))
                 font_name = BOLD_FONT if block.get("bold") else REGULAR_FONT
-                fitted_size = fit_text(
-                    block["translation"], font_name,
-                    float(block.get("max_font", default_max)),
-                    float(block.get("min_font", default_min)),
-                    width, height, float(block.get("leading_ratio", 1.16)),
-                ).font_size
+                try:
+                    fitted_size = fit_text(
+                        block["translation"], font_name,
+                        float(block.get("max_font", default_max)),
+                        float(block.get("min_font", default_min)),
+                        width, height, float(block.get("leading_ratio", 1.16)),
+                    ).font_size
+                except TextOverflowError as exc:
+                    raise TextOverflowError(f"block {block.get('id', '')} complete text does not fit: {exc}") from exc
             fitted_sizes.append(float(fitted_size))
         requested_size = float(evidence[group]["font_size"])
         common_size = min(fitted_sizes)
@@ -399,7 +404,53 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
     return evidence
 
 
+def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
+    """Reuse lossless bases only when every pixel-affecting input matches."""
+    render_path = Path(page["render_path"])
+    source_hash = hashlib.sha256(render_path.read_bytes()).hexdigest()
+    if page.get("render_sha256") and source_hash != page["render_sha256"].lower():
+        raise ValueError(f"source render hash mismatch on page {page['source_page']}")
+    cleanup = [{key: block[key] for key in ("action", "clean_box", "clean_boxes", "background")
+                if key in block} for block in blocks if block.get("action") == "replace"]
+    inputs = {"source": source_hash, "cleanup": cleanup,
+              "layout": page.get("layout_adjustments", []),
+              "implementation": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+    clean_dir.mkdir(parents=True, exist_ok=True)
+    clean_path = clean_dir / f"page-{page['source_page']:04d}.png"
+    metadata_path = clean_path.with_suffix(".json")
+    if clean_path.exists() and metadata_path.exists():
+        try:
+            cached = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if cached["key"] == key and cached["png_sha256"] == hashlib.sha256(clean_path.read_bytes()).hexdigest():
+                with Image.open(clean_path) as image:
+                    cleaned = image.convert("RGB")
+                return cleaned, cached["clean_report"], cached["layout_report"], True
+        except (OSError, ValueError, KeyError):
+            pass
+    with Image.open(render_path) as image:
+        source = image.convert("RGB")
+    if page.get("layout_adjustments"):
+        base, layout_report = apply_raster_layout_adjustments(source, page)
+    else:
+        base = source
+        layout_report = {"layout_adjustment_count": 0, "layout_changed_pixel_count": 0,
+                         "layout_outside_approved_pixel_changes": 0}
+    cleaned, clean_report = clean_background(base, blocks)
+    temporary = clean_path.with_suffix(".tmp.png")
+    cleaned.save(temporary, compress_level=1)
+    temporary.replace(clean_path)
+    cached = {"key": key, "png_sha256": hashlib.sha256(clean_path.read_bytes()).hexdigest(),
+              "clean_report": clean_report, "layout_report": layout_report}
+    temporary_meta = metadata_path.with_suffix(".tmp.json")
+    temporary_meta.write_text(json.dumps(cached), encoding="utf-8")
+    temporary_meta.replace(metadata_path)
+    return cleaned, clean_report, layout_report, False
+
+
 def build_pdf(manifest: dict, output_path: str | Path) -> dict:
+    started = time.perf_counter()
+    manifest = copy.deepcopy(manifest)
     register_fonts(manifest.get("target_language", ""))
     validate_manifest(manifest)
     output = Path(output_path).resolve()
@@ -419,28 +470,25 @@ def build_pdf(manifest: dict, output_path: str | Path) -> dict:
         "changed_pixel_count": 0,
         "source_crop_runs": [], "source_crop_run_count": 0, "mixed_color_block_count": 0,
     }
-    pdf = canvas.Canvas(str(output), pageCompression=1)
+    temporary_output = output.with_suffix(".building.pdf")
+    pdf = canvas.Canvas(str(temporary_output), pageCompression=1)
     for page_number in manifest["selected_pages"]:
         page = page_index[page_number]
-        render_path = Path(page["render_path"])
-        if page.get("render_sha256"):
-            digest = hashlib.sha256(render_path.read_bytes()).hexdigest()
-            if digest.lower() != str(page["render_sha256"]).lower():
-                raise ValueError(f"source render hash mismatch on page {page_number}")
+        page_started = time.perf_counter()
         typography_evidence = resolve_page_typography(blocks_by_page[page_number], page)
         pdf.setPageSize((page["width_pt"], page["height_pt"]))
-        with Image.open(page["render_path"]) as loaded:
-            source_image = loaded.convert("RGB")
-        layout_base, layout_report = apply_raster_layout_adjustments(source_image, page)
-        cleaned, clean_report = clean_background(layout_base, blocks_by_page[page_number])
+        cleaned, clean_report, layout_report, cache_hit = prepare_clean_base(page, blocks_by_page[page_number], clean_dir)
         clean_path = clean_dir / f"page-{page_number:04d}.png"
-        cleaned.save(clean_path, optimize=True)
         pdf.drawImage(ImageReader(cleaned), 0, 0, width=page["width_pt"], height=page["height_pt"], preserveAspectRatio=False)
         _draw_vector_lines(pdf, page)
         rendered_ids = []
+        source_image = None
         for block in blocks_by_page[page_number]:
             if block["action"] in {"replace", "add_bilingual"}:
                 if block.get("rich_lines"):
+                    if source_image is None:
+                        with Image.open(page["render_path"]) as loaded:
+                            source_image = loaded.convert("RGB")
                     rendered = _draw_rich_block(pdf, block, page, source_image)
                     report["source_crop_runs"].extend(rendered.pop("source_crop_runs"))
                     report["mixed_color_block_count"] += int(rendered.get("mixed_color", False))
@@ -448,13 +496,19 @@ def build_pdf(manifest: dict, output_path: str | Path) -> dict:
                     rendered = _draw_block(pdf, block, page)
                 report["rendered_blocks"].append(rendered)
                 rendered_ids.append(block["id"])
+        if source_image is not None:
+            source_image.close()
         pdf.showPage()
         report["outside_approved_pixel_changes"] += clean_report["outside_approved_pixel_changes"]
         report["outside_approved_pixel_changes"] += layout_report["layout_outside_approved_pixel_changes"]
         report["changed_pixel_count"] += clean_report["changed_pixel_count"]
         report["changed_pixel_count"] += layout_report["layout_changed_pixel_count"]
-        report["pages"].append({"source_page": page_number, "clean_path": str(clean_path), "rendered_block_ids": rendered_ids, "typography_evidence": typography_evidence, **layout_report, **clean_report})
+        elapsed = round(time.perf_counter() - page_started, 3)
+        report["pages"].append({"source_page": page_number, "clean_path": str(clean_path), "rendered_block_ids": rendered_ids, "typography_evidence": typography_evidence, "clean_cache_hit": cache_hit, "elapsed_seconds": elapsed, **layout_report, **clean_report})
+        print(json.dumps({"stage": "build", "page": page_number, "seconds": elapsed, "cache_hit": cache_hit}), flush=True)
     pdf.save()
+    temporary_output.replace(output)
+    report["elapsed_seconds"] = round(time.perf_counter() - started, 3)
     report["output"] = str(output)
     report["output_sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     report["rendered_block_count"] = len(report["rendered_blocks"])
