@@ -6,13 +6,16 @@ from pathlib import Path
 import sys
 import unittest
 
+import numpy as np
+from PIL import Image
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from contracts import ManifestError, validate_manifest  # noqa: E402
-from extract_scan import rotation_from_quad  # noqa: E402
+from extract_scan import _ocr_pass, rotation_from_quad  # noqa: E402
 from verify_scan import evaluate_evidence, requires_cjk_residual_gate  # noqa: E402
 import build_scan  # noqa: E402
 
@@ -60,6 +63,17 @@ def manifest(rotation: int = 90, block_rotation: int | None = 90) -> dict:
 
 
 class TextOrientationAndProvenanceTests(unittest.TestCase):
+    def test_ocr_pass_converts_pillow_image_to_numpy_for_rapidocr(self):
+        class NumpyOnlyEngine:
+            def __call__(self, image):
+                if not isinstance(image, np.ndarray):
+                    raise TypeError("OCR engine requires a NumPy array")
+                return ([[[0, 0], [20, 0], [20, 10], [0, 10]], "TEST", 0.99],), None
+
+        records = _ocr_pass(NumpyOnlyEngine(), Image.new("RGB", (40, 20), "white"), 1.0)
+
+        self.assertEqual("TEST", records[0]["text"])
+
     def test_chinese_target_uses_cjk_capable_font_and_skips_source_cjk_gate(self):
         self.assertIn("msyh", build_scan.CJK_REGULAR_FONT_PATHS[0].name.lower())
         self.assertFalse(requires_cjk_residual_gate("zh"))
