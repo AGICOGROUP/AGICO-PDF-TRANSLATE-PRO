@@ -10,6 +10,7 @@ import sys
 import math
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 from pypdf import PdfReader
 
@@ -74,7 +75,7 @@ def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
             (round(image.width * scale), round(image.height * scale)),
             Image.Resampling.LANCZOS,
         )
-    result, _ = engine(working)
+    result, _ = engine(np.asarray(working))
     records = []
     for item in result or []:
         points, text, score = item

@@ -298,6 +298,19 @@ def validate_manifest(manifest: dict) -> dict:
 
 
 def _wrap_paragraph(text: str, font_name: str, font_size: float, width: float) -> list[str]:
+    if any("\u3400" <= character <= "\u9fff" for character in text):
+        lines: list[str] = []
+        current = ""
+        for character in text:
+            candidate = current + character
+            if current and stringWidth(candidate, font_name, font_size) > width:
+                lines.append(current.rstrip())
+                current = character.lstrip()
+            else:
+                current = candidate
+        if current:
+            lines.append(current.rstrip())
+        return lines
     words = text.split()
     if not words:
         return [""]
