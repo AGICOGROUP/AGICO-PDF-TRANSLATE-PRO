@@ -31,12 +31,14 @@ def resolve(base: Path, value: str) -> Path:
 def default_font(bold: bool) -> Path:
     candidates = (
         [
+            Path(r"C:\Windows\Fonts\simhei.ttf"),
             Path(r"C:\Windows\Fonts\arialbd.ttf"),
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
             Path("/Library/Fonts/Arial Bold.ttf"),
         ]
         if bold
         else [
+            Path(r"C:\Windows\Fonts\simsun.ttc"),
             Path(r"C:\Windows\Fonts\arial.ttf"),
             Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
             Path("/Library/Fonts/Arial.ttf"),
@@ -87,7 +89,7 @@ def fitted_size(
         if width <= maximum_width and height <= maximum_height:
             return size
         size -= 0.1
-    return 1.8
+    raise ValueError('image text does not fit its placement box; wrap or correct layout')
 
 
 def draw_horizontal(
@@ -97,6 +99,12 @@ def draw_horizontal(
 ) -> None:
     left, bottom, right, top = rect
     lines = region["text"].splitlines()
+    if not lines:
+        return
+    body = str(region.get('role', '')).startswith('body')
+    align = region.get('align', 'left' if body else 'center')
+    if align not in ('left', 'center', 'right'):
+        raise ValueError(f'unsupported text alignment: {align}')
     font_name = FONT_BOLD if region.get("bold") else FONT_REGULAR
     size = fitted_size(
         lines,
@@ -108,13 +116,17 @@ def draw_horizontal(
     line_height = size * 1.16
     block_height = len(lines) * line_height
     baseline = bottom + (top - bottom - block_height) / 2 + block_height - size
+    if body:
+        baseline = top - size - 0.4
     pdf.setFont(font_name, size)
     for index, line in enumerate(lines):
-        pdf.drawCentredString(
-            (left + right) / 2,
-            baseline - index * line_height,
-            line,
-        )
+        y = baseline - index * line_height
+        if align == 'left':
+            pdf.drawString(left + 0.6, y, line)
+        elif align == 'right':
+            pdf.drawRightString(right - 0.6, y, line)
+        else:
+            pdf.drawCentredString((left + right) / 2, y, line)
 
 
 def draw_rotated(

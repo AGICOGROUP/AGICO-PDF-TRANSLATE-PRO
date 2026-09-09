@@ -31,6 +31,21 @@ def line(
 
 
 class PageRegionGroupingTests(unittest.TestCase):
+    def test_same_baseline_fragments_coalesce_before_paragraph_grouping(self) -> None:
+        groups = group_page_lines(
+            [
+                line("f1", "La presente", [100, 300, 290, 340]),
+                line("f2", "especificacion", [310, 301, 510, 341]),
+                line("f3", "ha sido elaborada", [535, 299, 810, 339]),
+                line("l2", "tomando como base las normas aplicables.", [100, 350, 850, 390]),
+            ],
+            page_height=1200,
+        )
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["line_ids"], ["f1", "f2", "f3", "l2"])
+        self.assertEqual(groups[0]["text"], "La presente especificacion ha sido elaborada tomando como base las normas aplicables.")
+        self.assertEqual(len(groups[0]["clean_boxes"]), 4)
+
     def test_continuous_body_lines_join_one_region_with_glyph_boxes(self) -> None:
         groups = group_page_lines(
             [

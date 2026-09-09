@@ -15,8 +15,9 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from contracts import ManifestError, validate_manifest  # noqa: E402
-from extract_scan import _ocr_pass, rotation_from_quad  # noqa: E402
+from extract_scan import _ocr_pass, merge_ocr_records, rotation_from_quad  # noqa: E402
 from verify_scan import evaluate_evidence, requires_cjk_residual_gate  # noqa: E402
+import extract_scan  # noqa: E402
 import build_scan  # noqa: E402
 
 
@@ -63,6 +64,106 @@ def manifest(rotation: int = 90, block_rotation: int | None = 90) -> dict:
 
 
 class TextOrientationAndProvenanceTests(unittest.TestCase):
+    def test_small_font_is_warning_but_actual_unreadability_blocks(self):
+        import verify_scan
+        data = manifest()
+        visual = {"all_pages_rendered": True, "reviewed_changed_regions": True,
+                  "untranslated_clear_labels": 0}
+        kwargs = dict(
+            manifest=data, extracted_by_page={1: "视图A"},
+            build_report={"builder": verify_scan.OFFICIAL_BUILDER,
+                          "source_sha256": data["source_sha256"],
+                          "manifest_sha256": verify_scan.canonical_manifest_sha256(data),
+                          "output_sha256": "b" * 64,
+                          "rendered_blocks": [{"id": "p01-label", "font_size": 6.5, "complete": True}],
+                          "outside_approved_pixel_changes": 0},
+            output_page_count=1, geometry_match=True, visual_review=visual,
+            residual_cjk=[], candidate_sha256="b" * 64,
+        )
+        report = evaluate_evidence(**kwargs)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(["p01-label"], report["warnings"]["minimum_font_failures"])
+        visual["unreadable_text_failures"] = [{"page": 1, "id": "p01-label"}]
+        self.assertFalse(evaluate_evidence(**kwargs)["passed"])
+
+    def test_page_detector_keeps_full_400_dpi_page_resolution(self):
+        class ResizeConfig:
+            limit_side_len = 736
+            limit_type = "min"
+
+        class Detector:
+            preprocess_op = [ResizeConfig()]
+
+        class Engine:
+            text_detector = Detector()
+
+        engine = Engine()
+
+        extract_scan.configure_page_detector(engine)
+
+        self.assertEqual(8000, engine.text_detector.preprocess_op[0].limit_side_len)
+        self.assertEqual("max", engine.text_detector.preprocess_op[0].limit_type)
+
+    def test_merge_drops_contained_word_fragment_from_other_scale(self):
+        records = [
+            {
+                "box": [100, 100, 500, 140],
+                "quad": [[100, 100], [500, 100], [500, 140], [100, 140]],
+                "rotation": 0,
+                "text": "fabricacion y suministro de durmientes",
+                "score": 0.91,
+                "scale": 1.0,
+            },
+            {
+                "box": [205, 102, 300, 138],
+                "quad": [[205, 102], [300, 102], [300, 138], [205, 138]],
+                "rotation": 0,
+                "text": "suministro",
+                "score": 0.96,
+                "scale": 3.0,
+            },
+        ]
+
+        merged = merge_ocr_records(records)
+
+        self.assertEqual(["fabricacion y suministro de durmientes"], [item["text"] for item in merged])
+
+    def test_merge_drops_corrupted_contained_fragment_from_other_scale(self):
+        records = [
+            {
+                "box": [100, 100, 500, 140],
+                "quad": [[100, 100], [500, 100], [500, 140], [100, 140]],
+                "rotation": 0,
+                "text": "METROPOLITANO LINEA B",
+                "score": 0.84,
+                "scale": 1.0,
+            },
+            {
+                "box": [205, 102, 300, 138],
+                "quad": [[205, 102], [300, 102], [300, 138], [205, 138]],
+                "rotation": 0,
+                "text": "METROPC",
+                "score": 0.91,
+                "scale": 3.0,
+            },
+        ]
+
+        merged = merge_ocr_records(records)
+
+        self.assertEqual(["METROPOLITANO LINEA B"], [item["text"] for item in merged])
+
+    def test_merge_keeps_distinct_line_inside_larger_multiline_box(self):
+        records = [
+            {"box": [100, 100, 500, 220], "quad": [], "rotation": 0,
+             "text": "marcan los planos de fabricacion", "score": 0.91, "scale": 1.0},
+            {"box": [110, 105, 490, 140], "quad": [], "rotation": 0,
+             "text": "El acero de refuerzo se colocara", "score": 0.96, "scale": 3.0},
+        ]
+
+        merged = merge_ocr_records(records)
+
+        self.assertEqual(2, len(merged))
+
     def test_ocr_pass_converts_pillow_image_to_numpy_for_rapidocr(self):
         class NumpyOnlyEngine:
             def __call__(self, image):

@@ -1,21 +1,49 @@
-# Native-CAD Quality Gates
+# CAD review and delivery
 
-Every gate is mandatory and bound to the prepared source and final candidate.
+Prepare provides source crops and cell proposals; apply reports unsafe regions,
+missing records, fit failures and font baselines; review combines source/target
+crops and script-residual candidates. Inspect these together and repair as a batch.
 
-1. Source integrity: `SOURCE.pdf` SHA-256 matches `source-inventory.json`.
-2. Structure: page count, size, rotation, and image count match; vector objects
-   do not decrease.
-3. Coverage: every pending record has one non-empty translated record; protected
-   engineering tokens remain unchanged.
-4. Text: source descriptive text is removed, translated text is selectable and
-   extractable, the CJK font is embedded, and `fit_failures` is empty.
-5. Graphics: title blocks, borders, dimensions, leaders, hatching, images, and
-   other non-text drawing content remain intact.
-6. Visual review: every page and changed region is reviewed; foreign descriptive
-   residue, overlap, clipping, missing glyphs, and graphic damage are empty lists.
-7. Evidence binding: the visual-review candidate SHA-256 matches the candidate,
-   and `final-qa.json` reports `passed: true`.
+Cell geometry never approves a cover. Check all members and source protrusions.
+Retain tags, numbers, borders, pipes and symbols. Replace a tight bilingual
+description once; never estimate a script boundary from character counts.
+A genuine separated existing target may use cover_only with target_present.
 
-White rectangular covers are not a general fallback. If Form/XObject text cannot
-be removed directly, stop unless a separately reviewed cover record proves the
-region has a plain background and contains no line, symbol, or graphic.
+Verify checks page count/size/rotation, painted image digests/transforms and
+retained vector count. Unused image resources and duplicate resource references
+may disappear on save without losing visible images; dummy objects are never a
+valid repair. These checks do not prove graphical integrity: inspect each
+replacement with source pixels.
+Confirm contextual meaning, quantities, units, negations, names, selectable
+translations, legible sizes, no clipped glyphs and no overlap. Review residual
+OCR candidates; identifiers can remain. Zero OCR detections prove no completeness.
+Use the enlarged source title block as the field inventory, including vertical
+headings; compare corresponding target cells, not just detected-record crops.
+Missing glyphs are content loss. Apply validates font coverage before output;
+the final render must still be checked after a font change because text can reflow.
+
+Apply writes an incomplete template; fill only after actual review:
+
+```json
+{
+  "candidate_sha256": "<exact candidate hash>",
+  "all_pages_reviewed": false,
+  "all_changed_regions_reviewed": false,
+  "visible_foreign_descriptive_text": [],
+  "text_overlap_failures": [],
+  "line_or_graphic_damage": [],
+  "notes": "Actual context review, OCR corrections and resolved findings."
+}
+```
+
+Delivery requires both booleans true, all findings resolved and final QA passed.
+A candidate change invalidates approval. Review cache binding includes source,
+candidate, packet records, residual script and review format version;
+missing/corrupt artifacts rebuild. Review format upgrades reuse the separately
+versioned OCR cache and do not require another recognition pass.
+The verifier validates the record contract, not the truth of semantic review.
+
+Use one initial candidate and one repair batch as a soft efficiency target.
+Report cold prepare (including supplement/crops), apply, review, cache hits and
+full translation elapsed separately. Never claim a fresh translation speedup
+from script replay or file-modification-time gaps.

@@ -20,8 +20,8 @@ as the source.
 ## Required inventory
 
 Create one image record for every original asset and one stable label record for
-every detected source-language label. Run OCR at native scale and again at 3x-4x
-scale, map both passes to native coordinates, and manually audit residual hits.
+every detected source-language label. Reuse one adequate-resolution OCR pass. Retry only uncertain or missed regions
+at higher resolution, map detections to native coordinates and review residual hits.
 
 Each image record must contain:
 
@@ -82,9 +82,10 @@ Use this review shape:
 Choose the first method whose predicate is satisfied. Fail closed when its
 evidence is incomplete.
 
-If an engineering diagram or flowchart already contains both the source text
+In bilingual output mode, if a diagram already contains both the source text
 and an English counterpart for its labels, preserve the original image
-unchanged. Record the labels as reviewed and preserved; do not clean the raster,
+unchanged. In explicit monolingual mode this shortcut does not apply. Record
+preserved labels as reviewed; do not clean the raster,
 remove either language, or add another English overlay.
 
 | Method | Use when | Required output |
@@ -108,8 +109,10 @@ diagram labels must be translated. A complex photographic background is a
 cleanup-routing problem, not permission to use `preserve_confirm`; use a local
 clean band or `constrained_clean_base` and add selectable vector text. For a
 caption already occupying a broad photo band, `solid_fill` may replace only the
-approved caption band with an explicit `fill_rgb`; all pixels outside that band
-must remain identical.
+approved text-only caption band with an explicit `fill_rgb`; all pixels outside
+that band must remain identical. A border, signature, stamp or artwork inside
+the band invalidates solid fill. Broad paragraph/page wipes are not caption
+localization. Declare nearby non-text artwork in image `protected_boxes`.
 
 ## Anchored line restoration
 
@@ -156,8 +159,8 @@ Restore all pixels outside approved regions from the original before checking
 the candidate. Reject any candidate that changes protected colors, line anchors,
 topology, symbols, borders, dimensions, or aspect ratio.
 
-Never ask an image model to generate final English. After the clean base passes,
-add English as embedded PDF vector text through `apply_image_vector_text.py`.
+Never ask an image model to generate final wording. After the clean base passes,
+add requested target text as embedded PDF vector text through `apply_image_vector_text.py`.
 
 ## `[CONFIRM]` policy
 

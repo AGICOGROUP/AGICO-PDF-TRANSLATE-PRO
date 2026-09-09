@@ -27,6 +27,17 @@ def block(block_id: str, role: str, size: float, bold: bool) -> dict:
 
 
 class PageTypographyPolicyTests(unittest.TestCase):
+    def test_dense_paragraph_only_reduces_itself(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import native_selectable_rebuild as rebuild
+        flows = [{"role": "body-12", "style": {"size": 12, "role_size": 12}, "text": t, "slots": []} for t in ["short", "dense"]]
+        with patch.object(rebuild, "fit_text_to_slots", side_effect=[(SimpleNamespace(size=12*rebuild.LAYOUT_SCALE), [], []), (SimpleNamespace(size=10*rebuild.LAYOUT_SCALE), [], [])]):
+            rebuild.harmonize_flow_font_sizes(flows, SimpleNamespace(font_file=lambda style: "font"), None)
+        self.assertEqual(flows[0]["target_font_size"], 12)
+        self.assertEqual(flows[1]["target_font_size"], 10)
+
+
     def test_numbered_heading_depth_does_not_treat_decimal_measurement_as_heading(self) -> None:
         self.assertEqual(section_heading_depth("4、电控(普通集中控制)"), 1)
         self.assertEqual(section_heading_depth("4.1、普通集中控制系统"), 2)

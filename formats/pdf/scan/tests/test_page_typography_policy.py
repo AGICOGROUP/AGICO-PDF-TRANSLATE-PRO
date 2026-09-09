@@ -40,7 +40,7 @@ class PageTypographyPolicyTests(unittest.TestCase):
         self.assertEqual(len({item["bold"] for item in minors}), 1)
         self.assertGreaterEqual(evidence["major_title"]["font_size"], evidence["minor_title"]["font_size"])
 
-    def test_dense_body_block_reduces_all_body_blocks_uniformly(self) -> None:
+    def test_dense_body_block_only_reduces_itself(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             render = root / "page.png"
@@ -58,11 +58,11 @@ class PageTypographyPolicyTests(unittest.TestCase):
             }
             report = build_pdf(manifest, root / "out.pdf")
             sizes = {item["id"]: item["font_size"] for item in report["rendered_blocks"]}
-            self.assertEqual(sizes["b1"], sizes["b2"])
-            self.assertLess(sizes["b1"], 12)
+            self.assertGreater(sizes["b1"], sizes["b2"])
+            self.assertEqual(sizes["b1"], 12)
 
 
-    def test_common_fit_does_not_let_one_body_block_shrink_independently(self) -> None:
+    def test_common_base_allows_paragraph_overflow_exception(self) -> None:
         register_fonts("en")
         blocks = [
             {"id": "short", "role": "body", "action": "replace", "translation": "Short text", "box": [20, 20, 380, 80], "max_font": 12, "min_font": 7, "bold": False},
@@ -71,8 +71,8 @@ class PageTypographyPolicyTests(unittest.TestCase):
         ]
         page = {"width_pt": 200, "height_pt": 200, "pixel_width": 400, "pixel_height": 400}
         evidence = resolve_page_typography(blocks, page)
-        self.assertEqual(blocks[0]["max_font"], blocks[1]["max_font"])
-        self.assertEqual(blocks[0]["min_font"], blocks[1]["min_font"])
+        self.assertGreater(blocks[0]["max_font"], blocks[1]["max_font"])
+        self.assertGreater(blocks[0]["min_font"], blocks[1]["min_font"])
         self.assertEqual(evidence["body"]["font_size"], blocks[0]["max_font"])
         self.assertNotEqual(blocks[2]["max_font"], blocks[0]["max_font"])
 

@@ -16,16 +16,18 @@ python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json"
 
 ## 2. OCR inventory and translation
 
-Use both 1x and 3x OCR results merged by geometry. Visually compare the 400-DPI render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
+Use cached single-scale OCR first. Retry only uncertain pages with --dual-scale or inspect uncertain crops at higher resolution. Visually compare the source render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
 
-OCR recognizes only cardinal orientations (0/90/180/270). Diagonally rotated
-labels — chart annotations such as RECHAZAR/ACEPTAR on Wald diagrams, slope
-text along inclined leaders — are silently missed by extraction and by any
-later OCR-based residue scan. Visually inspect every chart/diagram region of
-the 400-DPI render for such labels; add each miss to `source_lines` as a
-manually measured line (new stable ID, tight box, nearest cardinal rotation)
-and assign it to a translated block. Budget roughly 1–2 minutes of inspection
-per page containing charts or inclined annotations.
+Each completed page is saved atomically in `extract/page-checkpoints/` before
+the next OCR page begins. Resume with the same command/output directory; valid
+pages are reused, while changed source/configuration/renders are recomputed.
+Use `--no-resume` only for a deliberate cold run. The final extraction report is
+assembled from the requested pages in order, so manual batch merging is unnecessary.
+Per-page progress and report `elapsed_seconds` provide real timing evidence.
+The top-level `elapsed_seconds` is this invocation only. Cached pages retain
+their original processing duration. Neither field includes earlier failed
+attempts, and neither proves total translation time. Keep an independent task
+start timestamp and include retries when assessing the 120-second-per-page budget.
 
 Use the draft groups to translate prose with the complete ordered page as
 context and return one translation per region ID. A normal prose page should
@@ -36,12 +38,21 @@ URLs, emails, and trademarks exactly unless localization is explicitly required.
 Build a document-level glossary before translating repeated technical terms.
 Translate meaning, not OCR noise.
 
+`draft-groups.json` includes stable region IDs and a `pages` array containing
+ordered source IDs, whole-page text and region IDs. Include that page and the
+document glossary with each translation request. Use adjacent page context for
+continuations. Do not translate a global set of unique short strings without
+context: identical wording can have different meanings in different sections.
+Use the available capable model directly; installing a new offline translation
+engine or chaining source-to-English-to-target models is not a time-saving fallback
+for professional translation. Never lower the review standard to meet a deadline.
+
 Follow `../../../../references/page-context-translation-review.md`: reconstruct
 split sentences, use the whole page and glossary in every translation batch,
 and confirm OCR corrections against the source pixels. Adjacent pages provide
 context when content continues across a page boundary.
 
-Before translating a diagram, inventory all clear Chinese labels and their
+In additive bilingual mode, inventory all clear Chinese labels and their
 nearby target-language counterparts. Preserve the diagram as `bilingual_complete` only
 when every Chinese label is paired. Some target-language text on the image is insufficient;
 translate every unmatched Chinese label.
@@ -56,7 +67,6 @@ The default is tight glyph-only cleanup:
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
 - Photographs/UI/screenshots: do not synthesize unknown background. If text sits on a nonuniform texture and a clean removal cannot be proved, perform pixel-local clone/inpaint outside these generic scripts, then verify the protected structure at high zoom.
 - Logos: translate the readable wording while preserving artwork. A trademark or brand name may use `preserve_confirm` when translation would be incorrect.
-- Chart and hatched-grid labels (Wald diagrams, engineering chart boxes): clean with a solid white background (`background: [255, 255, 255]`) matching the original label box instead of a sampled color. Sampled medians on hatched patterns fill the clean box dark and hide the replacement text.
 
 ### Icon routing and mixed-color text
 
@@ -83,22 +93,17 @@ semantic function and source hierarchy, not OCR-box height alone. Titles are
 normally bold or larger, body is regular and dominant, and annotation is regular
 and smaller. When all three occur, preserve `title > body > annotation`.
 
-Fit groups independently. If one body region needs a smaller size, reduce every
-body region on that page to the same largest common fitting size. A caption,
-drawing label, header, footer, or table cell must never lower the common body
-size. If target text still cannot fit at the
-readable floor, record the fit failure before using a page `layout_adjustment`.
+Fit complete paragraphs at the page group's baseline with wrapping first. Only
+an overflowing paragraph may shrink, uniformly as a whole; record its baseline,
+fitted size and reason. Other paragraphs retain the baseline. A caption, drawing
+label, header, footer or table cell must not reduce body text size. Actual
+unreadability, not a numeric reference floor, requires correction. Record a real
+fit failure before using a page `layout_adjustment`.
 Try shifting a large image first, then proportional shrink. The old image area
 must be verified uniform background and both old and new boxes become approved
 difference regions.
 
 ## 4. Build
-
-Validate the manifest contract before building and fix every reported error first (a failed build discards minutes of raster work):
-
-```powershell
-python -c "import json, sys; sys.path.insert(0, 'scripts'); from contracts import validate_manifest; print(validate_manifest(json.load(open('job/manifest/translation-manifest.json', encoding='utf-8'))))"
-```
 
 ```powershell
 python scripts/build_scan.py --manifest "job/manifest/translation-manifest.json" --output "job/output/translated.pdf"
@@ -110,6 +115,14 @@ changed pixels and requires zero changes outside approved cleanup boxes. A pure
 are drawn after the cleaned page image and before target text. For every
 `source_crop` run it records the source page, source box, output box, pixel
 SHA-256, and alt description in the build report.
+
+The builder samples only the original glyph-border pixels and caches lossless
+clean bases under `output/clean-bases/`. Cache validation includes source-render
+hash, cleanup boxes/colors, raster adjustments and builder implementation hash.
+Changing only wording or fonts reuses the base while rebuilding all target text.
+Do not change cleanup boxes merely to obtain a cache hit. A failed build keeps
+the previous PDF intact; completed output replaces it atomically. The report
+records total/per-page elapsed time and base cache hits.
 
 ## 5. Review and verify
 
@@ -130,4 +143,4 @@ headers, footers, and icons. Create `visual-review.json` using the contract in
 python scripts/verify_scan.py --source "input.pdf" --manifest "job/manifest/translation-manifest.json" --pdf "job/output/translated.pdf" --visual-review "job/review/visual-review.json" --report "job/qa/final-qa.json"
 ```
 
-If QA fails, correct the smallest affected block and rerun build, render review, and verification. Never reuse stale visual-review evidence after changing the PDF.
+If QA finds a blocking content/readability/structure issue, correct the affected block within the shared time budget. Re-render only affected pages and retain traceable unchanged-page reviews. Cosmetic warnings do not trigger repeated rebuilds. At the limit share a labelled preview with known issues.

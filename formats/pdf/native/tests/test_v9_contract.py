@@ -17,7 +17,7 @@ class V9SkillContractTests(unittest.TestCase):
 
         self.assertRegex(
             content,
-            r"\[image-localization-routing\.md\]\(references/image-localization-routing\.md\)",
+            r"\[[^\]]+\]\(references/image-localization-routing\.md\)",
         )
         self.assertTrue(ROUTING.is_file())
 

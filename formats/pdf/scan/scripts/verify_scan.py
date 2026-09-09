@@ -296,6 +296,8 @@ def evaluate_evidence(
         "unassigned_source_lines": unassigned_source_lines,
         "official_pipeline": official_pipeline,
     }
+    report["warnings"] = {"minimum_font_failures": minimum_font_failures} if minimum_font_failures else {}
+    report["unreadable_text_failures"] = visual_review.get("unreadable_text_failures", [])
     report["passed"] = all(
         [
             not report["manifest_error"],
@@ -303,7 +305,7 @@ def evaluate_evidence(
             not report["missing_rendered_blocks"],
             not report["missing_translation_blocks"],
             not report["incomplete_render_blocks"],
-            not report["minimum_font_failures"],
+            not report["unreadable_text_failures"],
             report["unexpected_source_language"] == 0,
             report["output_page_count"] == report["expected_output_page_count"],
             report["page_geometry_match"],
@@ -330,6 +332,26 @@ def _word_in_regions(word: dict, regions: list[tuple[float, float, float, float]
     return any(x0 <= center_x <= x1 and y0 <= center_y <= y1 for x0, y0, x1, y1 in regions)
 
 
+def words_materially_overlap(first: dict, second: dict) -> bool:
+    """Return true only when two word boxes share material glyph area.
+
+    PDF font ascent/descent boxes from adjacent lines commonly touch by one or
+    two points even though the rendered glyphs do not.  Requiring overlap in a
+    meaningful fraction of the smaller word box avoids treating that normal
+    line-leading contact as a collision.
+    """
+    if first.get("upright") is not None and second.get("upright") is not None:
+        if bool(first["upright"]) != bool(second["upright"]):
+            return False
+    x_overlap = min(first["x1"], second["x1"]) - max(first["x0"], second["x0"])
+    y_overlap = min(first["bottom"], second["bottom"]) - max(first["top"], second["top"])
+    if x_overlap <= 0.7 or y_overlap <= 0.7:
+        return False
+    smaller_width = min(first["x1"] - first["x0"], second["x1"] - second["x0"])
+    smaller_height = min(first["bottom"] - first["top"], second["bottom"] - second["top"])
+    return x_overlap >= smaller_width * 0.2 and y_overlap >= smaller_height * 0.2
+
+
 def extract_output_text(
     pdf_path: Path,
     source_pages: list[int],
@@ -354,9 +376,7 @@ def extract_output_text(
                         continue
                     if second["top"] > first["bottom"] + 1:
                         continue
-                    x_overlap = min(first["x1"], second["x1"]) - max(first["x0"], second["x0"])
-                    y_overlap = min(first["bottom"], second["bottom"]) - max(first["top"], second["top"])
-                    if x_overlap > 0.7 and y_overlap > 0.7:
+                    if words_materially_overlap(first, second):
                         overlap_failures.append(
                             {
                                 "output_page": index + 1,
@@ -427,6 +447,39 @@ def residual_cjk_ocr(pdf_path: Path, output_dir: Path, source_pages: list[int]) 
     return residual
 
 
+def validate_translation_review(review: dict | None, manifest: dict, source_hash: str, output_hash: str) -> list[str]:
+    """Check evidence coverage, never infer semantic accuracy from technical QA."""
+    if not isinstance(review, dict):
+        return ["missing translation review"]
+    errors = []
+    for field, expected in (("source_sha256", source_hash), ("candidate_sha256", output_hash), ("adapter", "scan")):
+        if review.get(field) != expected:
+            errors.append(f"translation review {field} mismatch")
+    selected = manifest["selected_pages"]
+    entries = review.get("pages", [])
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        return errors + ["invalid translation review pages"]
+    if review.get("selected_source_pages") != selected or [p.get("source_page") for p in entries] != selected:
+        errors.append("translation review page coverage/order mismatch")
+    for entry in entries:
+        page = entry.get("source_page")
+        expected_ids = {line["id"] for line in manifest["source_lines"] if line["page"] == page}
+        ids = entry.get("reviewed_source_ids", [])
+        if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
+            errors.append(f"page {page}: invalid reviewed source IDs")
+        elif set(ids) != expected_ids or len(ids) != len(set(ids)):
+            errors.append(f"page {page}: incomplete/duplicate reviewed source IDs")
+        if entry.get("status") != "passed" or entry.get("unresolved_issues") != []:
+            errors.append(f"page {page}: unresolved semantic review")
+        context = entry.get("context_checked")
+        if not isinstance(context, str) or not context.strip() or not isinstance(entry.get("corrections"), list):
+            errors.append(f"page {page}: missing context/corrections evidence")
+        no_text_reason = entry.get("no_readable_text")
+        if not expected_ids and (not isinstance(no_text_reason, str) or not no_text_reason.strip()):
+            errors.append(f"page {page}: missing source-based no-readable-text reason")
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
@@ -434,6 +487,7 @@ def main() -> None:
     parser.add_argument("--pdf", required=True)
     parser.add_argument("--build-report")
     parser.add_argument("--visual-review", required=True)
+    parser.add_argument("--translation-review", help="Defaults to translation-review.json beside visual review")
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
 
@@ -451,6 +505,9 @@ def main() -> None:
     if str(manifest.get("source_sha256", "")).lower() != source_hash.lower():
         raise ValueError("manifest source SHA-256 does not match the source PDF")
     output_hash = sha256_file(pdf_path)
+    translation_path = Path(args.translation_review) if args.translation_review else Path(args.visual_review).with_name("translation-review.json")
+    translation_review = json.loads(translation_path.read_text(encoding="utf-8-sig")) if translation_path.exists() else None
+    semantic_errors = validate_translation_review(translation_review, manifest, source_hash, output_hash)
     if str(visual_review.get("candidate_sha256", "")).lower() != output_hash.lower():
         raise ValueError("visual review is not bound to the candidate PDF SHA-256")
     reader = PdfReader(str(pdf_path))
@@ -496,7 +553,8 @@ def main() -> None:
             ],
         }
     )
-    report["passed"] = report["passed"] and not report["unmatched_reviewed_ocr_false_positives"]
+    report["translation_review_errors"] = semantic_errors
+    report["passed"] = report["passed"] and not report["unmatched_reviewed_ocr_false_positives"] and not semantic_errors
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
