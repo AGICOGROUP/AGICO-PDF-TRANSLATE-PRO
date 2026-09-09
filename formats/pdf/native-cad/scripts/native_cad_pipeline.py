@@ -11,9 +11,13 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import time
+from statistics import median
 from typing import Any
 
 import pymupdf
+from cad_outline import extract_outline_records, cover_conflicts, drawing_index
+from cad_batch import cell_proposals, merge_supplement, page_ocr, review_bundle
 
 
 SOURCE_NAME = "SOURCE.pdf"
@@ -38,7 +42,9 @@ def sha256(path: Path) -> str:
 
 
 def write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
 
 
 def read_json(path: Path) -> Any:
@@ -48,6 +54,8 @@ def read_json(path: Path) -> Any:
 def is_protected(text: str) -> bool:
     value = " ".join(text.split())
     if not value:
+        return True
+    if value in {'M', 'PIT', 'PT', 'TT', 'TE', 'LT', 'LIT', 'PG', 'PS', 'PSL', 'PSH', 'LS', 'LSL', 'LSH', 'FT', 'FIT', 'VT', 'SE', 'DCS', 'PLC'}:
         return True
     return any(pattern.fullmatch(value) for pattern in PROTECTED_PATTERNS)
 
@@ -99,13 +107,21 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
     return records
 
 
-def prepare(source: Path, job_dir: Path) -> int:
+def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
     if not source.is_file():
         print("source file not found", file=sys.stderr)
         return 2
     job_dir.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    source_hash = sha256(source)
+    old_packet = read_json(job_dir / PACKET_NAME) if (job_dir / PACKET_NAME).exists() else {}
+    old_inventory = read_json(job_dir / INVENTORY_NAME) if (job_dir / INVENTORY_NAME).exists() else {}
+    if any(old and old.get('source_sha256') != source_hash for old in (old_packet, old_inventory)):
+        print('job belongs to another source; use a different job directory', file=sys.stderr)
+        return 2
     bound_source = job_dir / SOURCE_NAME
-    shutil.copyfile(source, bound_source)
+    if source.resolve() != bound_source.resolve():
+        shutil.copyfile(source, bound_source)
     try:
         document = pymupdf.open(bound_source)
     except Exception as exc:
@@ -122,7 +138,41 @@ def prepare(source: Path, job_dir: Path) -> int:
         "pages": [page_snapshot(page) for page in document],
         "records": extract_records(document),
     }
+    needs_ocr = ocr == 'always' or (ocr == 'auto' and any(p['vector_count'] > 100 or p['image_count'] for p in inventory['pages']))
+    if needs_ocr:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            engine = RapidOCR()
+            outlines, timing = extract_outline_records(document, job_dir, source_hash, inventory['records'], engine=engine)
+            supplement_started = time.perf_counter()
+            supplement_count, supplement_hits = 0, 0
+            for page_index, page in enumerate(document):
+                proposals, hit = page_ocr(page, source_hash, job_dir/'ocr-cache', engine)
+                added = merge_supplement(outlines, proposals, inventory['records'], page_index)
+                outlines.extend(added)
+                supplement_count += len(added)
+                supplement_hits += int(hit)
+            timing['supplement'] = {'seconds': round(time.perf_counter()-supplement_started,3),
+                                    'added': supplement_count, 'cache_hits': supplement_hits}
+        except Exception as exc:
+            document.close()
+            write_json(job_dir / 'prepare-report.json', {'passed': False, 'error': f'OCR failed; rerun to resume cached tiles: {exc}'})
+            return 2
+        for record in outlines:
+            if is_protected(record['source']):
+                record['status'] = 'protected'
+        inventory['records'].extend(outlines)
+        inventory['ocr'] = timing
+    # Same-source resume must not erase manually inventoried regions that OCR
+    # cannot reproduce. Re-extracted IDs remain authoritative.
+    extracted_ids = {r['id'] for r in inventory['records']}
+    inventory['records'].extend(r for r in old_inventory.get('records', [])
+                                if r['id'] not in extracted_ids)
+    placement = {}
+    for page_index, page in enumerate(document):
+        placement.update(cell_proposals(page, [r for r in inventory['records'] if r['page'] == page_index]))
     document.close()
+    previous = {r['id']: r for r in old_packet.get('records', [])}
     packet = {
         "schema_version": 1,
         "source_sha256": inventory["source_sha256"],
@@ -132,13 +182,30 @@ def prepare(source: Path, job_dir: Path) -> int:
                 "source": record["source"],
                 "translation": "",
                 "status": "pending",
+                "page": record['page'],
+                "bbox": record['bbox'],
+                "kind": record.get('kind', 'native'),
+                "role": 'body',
+                **({'placement_proposal': placement[record['id']]} if record['id'] in placement else {}),
+                **({'rotation': record['rotation']} if record.get('kind') == 'outline' else {}),
+                **({'cover_review': {'approved': False, 'text_only': False, 'white_background': False, 'note': ''}} if record.get('kind') == 'outline' else {}),
             }
             for record in inventory["records"]
             if record["status"] == "pending"
         ],
     }
+    for record in packet['records']:
+        old = previous.get(record['id'], {})
+        if (old.get('source') == record['source']
+                and old.get('page') == record['page']
+                and old.get('bbox') == record['bbox']):
+            record.update({k: v for k, v in old.items() if k not in ('id', 'source', 'page', 'bbox', 'kind')})
+    packet['page_context'] = [{'page': page, 'records': [{'id': r['id'], 'source': r['source']} for r in sorted(inventory['records'], key=lambda v: (v['bbox'][1], v['bbox'][0])) if r['page'] == page]} for page in range(inventory['page_count'])]
+    inventory['prepare_seconds'] = round(time.perf_counter() - started, 3)
     write_json(job_dir / INVENTORY_NAME, inventory)
     write_json(job_dir / PACKET_NAME, packet)
+    source_review = review_bundle(bound_source, job_dir/'source-review', packet['records'])
+    write_json(job_dir / 'prepare-report.json', {'passed': True, 'seconds': round(time.perf_counter()-started,3), 'ocr': inventory.get('ocr'), 'records': len(inventory['records']), 'cell_proposals': len(placement), 'source_review_seconds': source_review['seconds']})
     print(json.dumps({"stage": "prepared", "job_dir": str(job_dir)}, ensure_ascii=False))
     return 0
 
@@ -153,8 +220,22 @@ def validate_packet(
     }
     supplied = {str(record.get("id")): record for record in packet.get("records", [])}
     incomplete: list[str] = []
+    if len(supplied) != len(packet.get('records', [])):
+        incomplete.append('duplicate_packet_ids')
+    incomplete.extend(f'unexpected:{key}' for key in supplied.keys() - expected.keys())
     for record_id, source_record in expected.items():
         translated = supplied.get(record_id)
+        if (translated and translated.get('source') == source_record['source']
+                and translated.get('status') in ('dismissed', 'preserved')
+                and str(translated.get('review_note', '')).strip()
+                and (translated['status'] == 'preserved' or source_record.get('kind') == 'outline')):
+            continue
+        if (translated and translated.get('source') == source_record['source']
+                and translated.get('status') == 'cover_only'
+                and source_record.get('kind') == 'outline'
+                and str(translated.get('target_present', '')).strip()
+                and str(translated.get('review_note', '')).strip()):
+            continue
         if (
             translated is None
             or translated.get("source") != source_record["source"]
@@ -182,9 +263,9 @@ def insert_fitted_text(
     rotation: int,
     font_file: Path,
 ) -> float | None:
-    size = max(source_size, 4.0)
-    while size >= 4.0:
-        spare = page.insert_textbox(
+    def probe(size):
+        shape = page.new_shape()
+        spare = shape.insert_textbox(
             rect,
             text,
             fontname="nativecad-cjk",
@@ -192,15 +273,74 @@ def insert_fitted_text(
             fontsize=size,
             color=color,
             rotate=rotation,
-            overlay=True,
         )
-        if spare >= 0:
-            return round(size, 3)
-        size = round(size - 0.5, 3)
-    return None
+        return shape if spare >= 0 else None
+    high, low = max(source_size, 4.0), 4.0
+    shape = probe(high)
+    if shape is not None:
+        shape.commit(overlay=True)
+        return round(high, 3)
+    best = probe(low)
+    if best is None:
+        return None
+    # Binary search fits the entire paragraph without repeatedly mutating PDF.
+    while high - low > .1:
+        size = (high + low) / 2
+        shape = probe(size)
+        if shape is None:
+            high = size
+        else:
+            low, best = size, shape
+    best.commit(overlay=True)
+    return round(low, 3)
+
+
+def typography_baselines(records, supplied):
+    groups = {}
+    for record in records:
+        role = supplied[str(record['id'])].get('role', 'body')
+        groups.setdefault((int(record['page']), role), []).append(float(record['font_size']))
+    baseline = {key: max(4, median(sizes)) for key, sizes in groups.items()}
+    for page, _ in groups:
+        body = baseline.get((page, 'body'))
+        if body is not None:
+            if (page, 'annotation') in baseline:
+                body = baseline[(page, 'body')] = max(5., body)
+            if (page, 'title') in baseline:
+                baseline[(page, 'title')] = max(baseline[(page, 'title')], body * 1.25)
+            if (page, 'annotation') in baseline:
+                baseline[(page, 'annotation')] = min(baseline[(page, 'annotation')], max(4, body * .8))
+    return baseline
+
+
+def redraw_paths(page: pymupdf.Page, paths: list[dict[str, object]]) -> None:
+    for path in paths:
+        shape = page.new_shape()
+        for item in path['items']:
+            if item[0] == 'l':
+                shape.draw_line(item[1], item[2])
+            elif item[0] == 'c':
+                shape.draw_bezier(item[1], item[2], item[3], item[4])
+            elif item[0] == 're':
+                shape.draw_rect(item[1])
+            elif item[0] == 'qu':
+                shape.draw_quad(item[1])
+        line_cap = path.get('lineCap', 0)
+        if isinstance(line_cap, (tuple, list)):
+            line_cap = max(line_cap)
+        shape.finish(
+            color=path.get('color'), fill=path.get('fill'),
+            width=float(path.get('width') or 0.1), dashes=path.get('dashes'),
+            lineCap=int(line_cap or 0), lineJoin=int(path.get('lineJoin') or 0),
+            closePath=bool(path.get('closePath')), even_odd=bool(path.get('even_odd')),
+            stroke_opacity=float(path.get('stroke_opacity') or 1),
+            fill_opacity=float(path.get('fill_opacity') or 1),
+        )
+        shape.commit(overlay=True)
 
 
 def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
+    started = time.perf_counter()
     inventory_path = job_dir / INVENTORY_NAME
     bound_source = job_dir / SOURCE_NAME
     report_path = job_dir / APPLY_REPORT_NAME
@@ -231,35 +371,121 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         )
         return 2
 
+    # Check each distinct output character once, before covering any source text.
+    characters = {c for r in supplied.values() if r.get('status') == 'translated'
+                  for c in r['translation'] if not c.isspace()}
+    requested_font = font_file
+    missing = []
+    for candidate_font in dict.fromkeys((font_file, DEFAULT_FONT.parent / 'ARIALUNI.TTF',
+                                         DEFAULT_FONT.parent / 'arial.ttf')):
+        if not candidate_font.is_file():
+            continue
+        font = pymupdf.Font(fontfile=str(candidate_font))
+        missing = sorted(c for c in characters if not font.has_glyph(ord(c)))
+        if not missing:
+            font_file = candidate_font
+            break
+    if missing:
+        write_json(report_path, {'passed': False, 'failures': ['font_missing_glyphs'],
+                                'font_file': str(requested_font),
+                                'missing_glyphs': [f'U+{ord(c):04X}' for c in missing]})
+        return 2
+
     document = pymupdf.open(bound_source)
-    pending = [record for record in inventory["records"] if record["status"] == "pending"]
+    covered = [record for record in inventory["records"] if record["status"] == "pending" and supplied[str(record['id'])].get('status') in ('translated', 'cover_only')]
     by_page: dict[int, list[dict[str, object]]] = {}
-    for record in pending:
+    for record in covered:
         by_page.setdefault(int(record["page"]), []).append(record)
+    unsafe = []
+    restore_by_page: dict[int, set[int]] = {}
+    drawings_by_page = {}
+    for page_index, records in by_page.items():
+        drawings = drawing_index(document[page_index]) if any(r.get('kind') == 'outline' for r in records) else []
+        drawings_by_page[page_index] = drawings
+        for record in records:
+            if record.get('kind') != 'outline':
+                continue
+            translated = supplied[str(record['id'])]
+            review = translated.get('cover_review', {})
+            # Explicit agent pixel review, never inferred from OCR confidence.
+            boxes = translated.get('cover_boxes', [record['bbox']])
+            layout_box = translated.get('layout_box', record['bbox'])
+            reasons = []
+            if not boxes:
+                reasons.append('empty_cover_boxes')
+            if translated.get('rotation', record['rotation']) not in (0, 90, 180, 270):
+                reasons.append('unsupported_rotation')
+            for box in dict.fromkeys(tuple(b) for b in boxes):
+                box_reasons = cover_conflicts(document[page_index], box, drawings)
+                if review.get('source_text_paths') is True:
+                    threshold = max(24., min(pymupdf.Rect(record['bbox']).width, pymupdf.Rect(record['bbox']).height) * 2.5)
+                    source_rect = pymupdf.Rect(record['bbox']) + (-2, -2, 2, 2)
+                    def is_reviewed_source_text(reason):
+                        if ':' not in reason:
+                            return False
+                        path_rect = pymupdf.Rect(drawings['paths'][int(reason.split(':')[1])]['rect'])
+                        return (max(path_rect.width, path_rect.height) <= threshold
+                                or (min(path_rect.width, path_rect.height) > 2 and path_rect.intersects(source_rect)))
+                    box_reasons = [reason for reason in box_reasons if not is_reviewed_source_text(reason)]
+                reasons.extend(box_reasons)
+                if not pymupdf.Rect(box).intersects(pymupdf.Rect(record['bbox'])):
+                    reasons.append('region_not_adjacent_to_source')
+                for other in inventory['records']:
+                    if other['page'] == page_index and other['id'] != record['id'] and other.get('kind') != 'outline' and pymupdf.Rect(box).intersects(pymupdf.Rect(other['bbox'])):
+                        reasons.append(f'other_native_text:{other["id"]}')
+            if not document[page_index].rect.contains(pymupdf.Rect(layout_box)):
+                reasons.append('layout_outside_page')
+            if not pymupdf.Rect(layout_box).intersects(pymupdf.Rect(record['bbox'])):
+                reasons.append('layout_not_adjacent_to_source')
+            if not all(review.get(k) is True for k in ('approved', 'text_only', 'white_background')) or not review.get('note'):
+                reasons.append('source_pixel_review_required')
+            restorable = {'crossing_path', 'symbol_or_frame', 'filled_region', 'curve'}
+            if reasons and review.get('restore_conflicting_paths') is True and all(reason.split(':')[0] in restorable for reason in reasons):
+                restore_by_page.setdefault(page_index, set()).update(
+                    int(reason.split(':')[1]) for reason in reasons
+                )
+                reasons = []
+            if reasons:
+                unsafe.append({'id': record['id'], 'reasons': reasons})
+    if unsafe:
+        document.close()
+        write_json(report_path, {'passed': False, 'failures': ['unsafe_outline_regions'], 'regions': unsafe, 'fit_failures': []})
+        return 2
     for page_index, records in by_page.items():
         page = document[page_index]
         for record in records:
-            page.add_redact_annot(pymupdf.Rect(record["bbox"]), fill=None, cross_out=False)
+            if record.get('kind') != 'outline':
+                page.add_redact_annot(pymupdf.Rect(record["bbox"]), fill=None, cross_out=False)
         page.apply_redactions(images=0, graphics=0, text=0)
+        for record in records:
+            if record.get('kind') == 'outline':
+                for box in supplied[str(record['id'])].get('cover_boxes', [record['bbox']]):
+                    page.draw_rect(pymupdf.Rect(box), color=None, fill=(1, 1, 1), overlay=True)
+        if restore_by_page.get(page_index):
+            redraw_paths(page, [drawings_by_page[page_index]['paths'][index] for index in sorted(restore_by_page[page_index])])
 
     fit_failures: list[str] = []
     applied_records: list[dict[str, object]] = []
-    for record in pending:
+    translated_records = [record for record in covered if supplied[str(record['id'])].get('status') == 'translated']
+    baselines = typography_baselines(translated_records, supplied)
+    for record in translated_records:
         translated = supplied[str(record["id"])]
         page = document[int(record["page"])]
         fitted_size = insert_fitted_text(
             page,
-            pymupdf.Rect(record["bbox"]),
+            pymupdf.Rect(translated.get('layout_box', record['bbox'])),
             str(translated["translation"]).strip(),
-            float(record["font_size"]),
+            baselines[(int(record['page']), translated.get('role', 'body'))],
             rgb_from_int(int(record["color"])),
-            int(record["rotation"]),
+            int(translated.get('rotation', record['rotation']) if record.get('kind') == 'outline' else record['rotation']),
             font_file,
         )
         if fitted_size is None:
             fit_failures.append(str(record["id"]))
         else:
-            applied_records.append({"id": record["id"], "font_size": fitted_size})
+            baseline = baselines[(int(record['page']), translated.get('role', 'body'))]
+            applied_records.append({"id": record["id"], "font_size": fitted_size, 'baseline_font_size': baseline,
+                                    'shrink_reason': 'complete_paragraph_overflow' if fitted_size < baseline else None})
 
     output = job_dir / OUTPUT_NAME
     if fit_failures:
@@ -287,8 +513,14 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
             "incomplete_records": [],
             "fit_failures": [],
             "applied_records": applied_records,
+            "seconds": round(time.perf_counter() - started, 3),
+            "packet_sha256": sha256(packet_path),
+            "font_file": str(font_file),
+            "requested_font_file": str(requested_font),
+            "restored_path_count": sum(len(paths) for paths in restore_by_page.values()),
         },
     )
+    write_review_template(job_dir, sha256(output))
     print(json.dumps({"stage": "applied", "output": str(output)}, ensure_ascii=False))
     return 0
 
@@ -299,6 +531,15 @@ def same_page_structure(expected: dict[str, object], actual: dict[str, object]) 
         for key in ("width", "height", "rotation", "image_count")
     )
     return stable_fields_match and int(actual["vector_count"]) >= int(expected["vector_count"])
+
+
+def write_review_template(job_dir: Path, candidate_hash: str) -> None:
+    write_json(job_dir / 'visual-review.template.json', {
+        'candidate_sha256': candidate_hash,
+        'all_pages_reviewed': False, 'all_changed_regions_reviewed': False,
+        'visible_foreign_descriptive_text': [], 'text_overlap_failures': [],
+        'line_or_graphic_damage': [], 'notes': '',
+    })
 
 
 def verify(
@@ -330,10 +571,13 @@ def verify(
             failures.append("page_structure_mismatch")
         preview_dir = job_dir / "review"
         preview_dir.mkdir(exist_ok=True)
+        render_binding = preview_dir / 'render-binding.json'
+        rendered = read_json(render_binding) if render_binding.exists() else {}
         for index, page in enumerate(document):
-            page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).save(
-                preview_dir / f"page-{index + 1:04d}.png"
-            )
+            path = preview_dir / f'page-{index + 1:04d}.png'
+            if rendered.get('candidate_sha256') != candidate_hash or not path.exists() or rendered.get('images', {}).get(path.name) != sha256(path):
+                page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).save(path)
+        write_json(render_binding, {'candidate_sha256': candidate_hash, 'images': {p.name: sha256(p) for p in preview_dir.glob('page-*.png')}})
         document.close()
     except Exception as exc:
         failures.append(f"candidate_read_error:{exc}")
@@ -353,7 +597,9 @@ def verify(
             "text_overlap_failures",
             "line_or_graphic_damage",
         ):
-            if review.get(key) != []:
+            if key not in review:
+                failures.append(f'missing_review_field:{key}')
+            elif review.get(key) != []:
                 failures.append(key)
 
     qa = {
@@ -373,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("source", type=Path)
     prepare_parser.add_argument("--job-dir", required=True, type=Path)
+    prepare_parser.add_argument('--ocr', choices=('auto', 'always'), default='auto', help='auto detects vector-rich/image pages; always also scans sparse outline drawings')
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("job_dir", type=Path)
     apply_parser.add_argument("--packet", required=True, type=Path)
@@ -381,6 +628,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("job_dir", type=Path)
     verify_parser.add_argument("--candidate", required=True, type=Path)
     verify_parser.add_argument("--visual-review", type=Path)
+    review_parser = subparsers.add_parser('review', help='Generate combined side-by-side review and residual candidates')
+    review_parser.add_argument('job_dir', type=Path)
+    review_parser.add_argument('--candidate', type=Path, required=True)
+    review_parser.add_argument('--residual-script', choices=('cjk','latin'), required=True,
+                               help='Source script to flag; identifiers are review candidates, not failures')
     return parser
 
 
@@ -389,9 +641,24 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     args = build_parser().parse_args()
     if args.command == "prepare":
-        return prepare(args.source, args.job_dir)
+        return prepare(args.source, args.job_dir, args.ocr)
     if args.command == "apply":
         return apply(args.job_dir, args.packet, args.font_file)
+    if args.command == 'review':
+        packet = read_json(args.job_dir / PACKET_NAME)
+        bound_source = args.job_dir / SOURCE_NAME
+        if packet.get('source_sha256') != sha256(bound_source):
+            raise ValueError('packet source hash mismatch')
+        candidate_hash = sha256(args.candidate)
+        applied = read_json(args.job_dir / APPLY_REPORT_NAME)
+        if not applied.get('passed') or applied.get('candidate_sha256') != candidate_hash:
+            raise ValueError('candidate must match successful apply report')
+        report = review_bundle(bound_source, args.job_dir/'batch-review', packet['records'],
+                               args.candidate, candidate_hash, args.residual_script)
+        print(json.dumps({'stage':'review', 'seconds':report['seconds'],
+                          'residual_candidates':len(report['residual_candidates']),
+                          'index':str(args.job_dir/'batch-review'/'index.html')}))
+        return 0
     return verify(args.job_dir, args.candidate, args.visual_review)
 
 

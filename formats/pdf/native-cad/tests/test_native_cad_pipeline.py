@@ -185,6 +185,11 @@ class NativeCadPipelineTests(unittest.TestCase):
             qa = json.loads((job / "final-qa.json").read_text(encoding="utf-8"))
             self.assertTrue(qa["passed"])
             self.assertEqual([], qa["failures"])
+            preview = job / 'review' / 'page-0001.png'
+            rendered_at = preview.stat().st_mtime_ns
+            repeated = self.run_pipeline('verify', job, '--candidate', candidate, '--visual-review', review)
+            self.assertEqual(0, repeated.returncode, repeated.stderr)
+            self.assertEqual(rendered_at, preview.stat().st_mtime_ns)
 
     def test_form_xobject_text_is_inventoried_and_replaced(self):
         with tempfile.TemporaryDirectory() as directory:
