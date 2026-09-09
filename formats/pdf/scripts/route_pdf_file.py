@@ -11,6 +11,9 @@ import sys
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pdf_text_visibility import native_char_count
+
 
 PDF_SIGNATURE = b"%PDF-"
 NATIVE_ADAPTER = "formats/pdf/native/SKILL.md"
@@ -110,8 +113,7 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
         rotated: list[int] = []
         page_sizes: list[tuple[float, float]] = []
         for page_number, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            counts.append(len("".join(text.split())))
+            counts.append(native_char_count(page))
             page_sizes.append((float(page.mediabox.width), float(page.mediabox.height)))
             if int(page.rotation or 0) % 360:
                 rotated.append(page_number)

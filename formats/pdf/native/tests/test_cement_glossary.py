@@ -11,7 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GLOSSARY = ROOT / "references" / "cement-terminology.md"
 LOOKUP = ROOT / "scripts" / "glossary_lookup.py"
-EXPECTED_SHA256 = "9b74a21a2625e9745666483e0e1b546cc21745b3fcbcccd976a57eeca4a5022f"
+# Exact origin/main glossary, canonical LF; Git checkout line endings are not content.
+EXPECTED_SHA256 = "227c25df5d59fb4ddae9479e313186c98df004539e44ca460b723b1d09419e0d"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -23,7 +24,7 @@ def run(*args: str) -> subprocess.CompletedProcess[str]:
 class CementGlossaryTests(unittest.TestCase):
     def test_bundles_exact_user_glossary_and_documents_precedence(self):
         self.assertTrue(GLOSSARY.is_file())
-        self.assertEqual(hashlib.sha256(GLOSSARY.read_bytes()).hexdigest(), EXPECTED_SHA256)
+        self.assertEqual(hashlib.sha256(GLOSSARY.read_bytes().replace(b'\r\n', b'\n')).hexdigest(), EXPECTED_SHA256)
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("cement-terminology.md", skill)
         self.assertIn("glossary_lookup.py", skill)

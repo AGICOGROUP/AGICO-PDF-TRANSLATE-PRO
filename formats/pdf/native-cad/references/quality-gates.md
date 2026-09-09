@@ -9,8 +9,11 @@ Retain tags, numbers, borders, pipes and symbols. Replace a tight bilingual
 description once; never estimate a script boundary from character counts.
 A genuine separated existing target may use cover_only with target_present.
 
-Verify checks page count/size/rotation, images and retained vectors. Counts do
-not prove graphical integrity: inspect each replacement with source pixels.
+Verify checks page count/size/rotation, painted image digests/transforms and
+retained vector count. Unused image resources and duplicate resource references
+may disappear on save without losing visible images; dummy objects are never a
+valid repair. These checks do not prove graphical integrity: inspect each
+replacement with source pixels.
 Confirm contextual meaning, quantities, units, negations, names, selectable
 translations, legible sizes, no clipped glyphs and no overlap. Review residual
 OCR candidates; identifiers can remain. Zero OCR detections prove no completeness.

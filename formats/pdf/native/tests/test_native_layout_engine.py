@@ -29,6 +29,38 @@ pipeline = load_module("pdf_translation_pipeline_layout", "pdf_translation_pipel
 
 
 class NativeTextStreamTests(unittest.TestCase):
+    def test_role_classifier_reclassifies_unsupported_ocr_artifact_role(self):
+        pages = [{"page": 1, "width": 200, "height": 300, "blocks": [{
+            "id": "p0001-b0001", "bbox": [20, 100, 40, 110],
+            "source_text": "garbled", "translation": ".",
+            "role": "ocr-artifact", "style": {"size": 7},
+        }]}]
+
+        pipeline.classify_document_roles(pages)
+
+        self.assertNotEqual("ocr-artifact", pages[0]["blocks"][0]["role"])
+
+    def test_make_overlay_rejects_unproven_content_suppression(self):
+        page = {"page": 1, "width": 200, "height": 300, "blocks": [{
+            "id": "p0001-b0001", "bbox": [20, 100, 22, 110],
+            "source_text": "garbled", "translation": ".",
+            "role": "ocr-artifact", "style": {"size": 7, "role_size": 7},
+            "lines": [], "characters": [], "runs": [],
+        }]}
+
+        with self.assertRaisesRegex(ValueError, 'ocr-artifact'):
+            rebuild.make_overlay(page, pipeline, {})
+
+    def test_make_overlay_emits_one_pdf_page_when_source_page_has_no_text_blocks(self):
+        overlay_bytes, report = rebuild.make_overlay(
+            {"page": 1, "width": 200, "height": 300, "blocks": []},
+            pipeline,
+            {},
+        )
+
+        self.assertEqual(1, len(PdfReader(__import__("io").BytesIO(overlay_bytes)).pages))
+        self.assertEqual([], report)
+
     def test_strip_native_text_handles_ascii85_flate_content_streams(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "ascii85-source.pdf"

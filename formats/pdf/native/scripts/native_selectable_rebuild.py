@@ -1484,7 +1484,11 @@ def make_overlay(
     scratch_image = Image.new("RGB", (8, 8), "white")
     scratch = ImageDraw.Draw(scratch_image)
     report: list[dict[str, Any]] = []
-    blocks = page_info["blocks"]
+    blocks = page_info['blocks']
+    if any(block.get('role') == 'ocr-artifact' for block in blocks):
+        raise ValueError('ocr-artifact is not a content-suppression route; reclassify the original PDF')
+    page_info = dict(page_info)
+    page_info["blocks"] = blocks
     page_info["typography_evidence"] = apply_page_typography_policy(page_info)
     segmented_table_flows, segmented_table_ids = build_table_cell_render_plan(
         page_info, pipeline
@@ -1772,6 +1776,10 @@ def make_overlay(
             }
         )
 
+    # ReportLab omits an untouched page when save() is called directly. Mixed
+    # PDFs can legitimately contain image-only pages with no native text blocks,
+    # so explicitly finalize the overlay page before saving it.
+    pdf.showPage()
     pdf.save()
     scratch_image.close()
     return stream.getvalue(), report

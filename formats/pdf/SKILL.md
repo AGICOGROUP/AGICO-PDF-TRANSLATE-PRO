@@ -13,12 +13,16 @@ adapter workflows.
 
 1. Determine the output mode from the request:
    - `auto` for ordinary translation wording;
-   - `replace` only when the user explicitly wants source text removed or
-     replaced so only the translation remains;
+   - `replace` when the user specifies monolingual / 单语 / 仅中文, or explicitly
+     wants source text removed or replaced so only the translation remains;
    - `bilingual` when the user wants the original kept beside the translation.
 2. Run `python formats/pdf/scripts/route_pdf_file.py <uploaded-file> --mode
    <auto|replace|bilingual>` from the repository root.
 3. Stop if the report contains an `error` or returns a nonzero exit code.
+   Hidden OCR text (`Tr=3`, or clipping-only `Tr=7`) does not count as visible
+   native text. A scan with only this layer remains `scan-only` even when its
+   OCR can be copied. The router and scan classifier share this check; do not
+   override it by relabeling all extracted blocks as `ocr-artifact`.
 4. If an `auto` or `bilingual` report returns
    `document_kind: engineering-drawing`, use its `translation_mode: add_bilingual`.
    Inventory all clear Chinese and foreign labels, save the five coverage

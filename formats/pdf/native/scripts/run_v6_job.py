@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ from pypdf import PdfReader
 
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1] / 'scripts'))
+from pdf_text_visibility import native_char_count
 IMAGE_LOCALIZATION_METHODS = {
     "native_edit",
     "deterministic_cleanup",
@@ -44,6 +47,8 @@ def _run(script: str, *arguments: object) -> None:
         [sys.executable, str(HERE / script), *(str(value) for value in arguments)],
         capture_output=True,
         text=True,
+        encoding='utf-8',
+        env={**os.environ, 'PYTHONUTF8': '1'},
     )
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
@@ -65,6 +70,8 @@ def _artifact(job: dict[str, Any], name: str) -> Path:
 
 
 def init_job(source: Path, jobs_root: Path) -> Path:
+    if not any(native_char_count(page) for page in PdfReader(source).pages):
+        raise ValueError('scan-only PDF (possibly hidden OCR); use translate-scan-pdf-professionally')
     job_dir = state.create_job(source, jobs_root)
     job = state.load_job(job_dir)
     manifest = job_dir / "manifest.json"
@@ -104,8 +111,47 @@ def _manifest_complete(path: Path) -> bool:
         for block in page.get("blocks", [])
     ]
     return bool(blocks) and all(
-        str(block.get("translation", "")).strip() for block in blocks
+        str(block.get("translation", "")).strip()
+        and block.get('role') != 'ocr-artifact' for block in blocks
     )
+
+
+def validate_cleanup_evidence(report: dict, expected_ids: set[str]) -> None:
+    records = report.get('images')
+    if (not isinstance(records, list) or not all(isinstance(item, dict) for item in records)
+            or {item.get('id') for item in records} != expected_ids
+            or len(records) != len(expected_ids)):
+        raise ValueError('cleanup evidence image coverage mismatch')
+    for item in records:
+        for metric in ('outside_region_pixel_changes', 'protected_pixel_changes'):
+            if type(item.get(metric)) is not int or item[metric] != 0:
+                raise ValueError(f'cleanup evidence missing or failed: {item.get("id")} / {metric}')
+
+
+def validate_translation_review(review, expected_by_page, source_hash, candidate_hash):
+    """Validate the existing semantic review, not infer accuracy from counts."""
+    if not isinstance(review, dict):
+        raise ValueError('missing translation review')
+    for key, expected in (('source_sha256', source_hash), ('candidate_sha256', candidate_hash), ('adapter', 'native')):
+        if review.get(key) != expected:
+            raise ValueError(f'translation review {key} mismatch')
+    pages = review.get('pages')
+    if (not isinstance(pages, list) or not all(isinstance(p, dict) for p in pages)
+            or review.get('selected_source_pages') != list(expected_by_page)
+            or [p.get('source_page') for p in pages] != list(expected_by_page)):
+        raise ValueError('translation review page coverage mismatch')
+    for page in pages:
+        expected = expected_by_page[page['source_page']]
+        ids = page.get('reviewed_source_ids')
+        if (not isinstance(ids, list) or not all(isinstance(i, str) for i in ids)
+                or set(ids) != expected or len(ids) != len(expected)):
+            raise ValueError(f'translation review source IDs mismatch: page {page["source_page"]}')
+        if (page.get('status') != 'passed' or page.get('unresolved_issues') != []
+                or not isinstance(page.get('context_checked'), str) or not page['context_checked'].strip()
+                or not isinstance(page.get('corrections'), list)):
+            raise ValueError('translation review incomplete or unresolved')
+        if not expected and (not isinstance(page.get('no_readable_text'), str) or not page['no_readable_text'].strip()):
+            raise ValueError('translation review missing no-readable-text reason')
 
 
 def _validate_image_localization_review(
@@ -218,8 +264,16 @@ def resume(job_dir: Path) -> tuple[dict[str, Any], int]:
         action = "assemble"
     elif stage == "assembled":
         action = "complete_visual_review"
+    elif stage == 'verified':
+        state.assert_artifacts(job_dir, tuple(job['artifacts']))
+        qa = json.loads(_artifact(job, 'final_qa').read_text(encoding='utf-8'))
+        evidence_current = (qa.get('evidence_version') == 2 and qa.get('passed') is True
+                            and qa.get('translation_review_complete') is True
+                            and {'translation_review', 'visual_review'} <= set(job['artifacts'])
+                            and _manifest_complete(_artifact(job, 'manifest')))
+        action = 'deliver' if evidence_current else 'revalidate_evidence'
     else:
-        action = "deliver"
+        raise ValueError(f'unknown job stage: {stage}')
     code = 0 if action == "deliver" else 2
     return {
         "job_dir": str(job_dir.resolve()),
@@ -294,8 +348,8 @@ def build_images(job_dir: Path) -> None:
     report = job_dir / "clean-image-report.json"
     _run("build_clean_image_bases.py", metadata, "--report", report)
     report_data = json.loads(report.read_text(encoding="utf-8"))
-    if any(item.get("outside_region_pixel_changes", 0) for item in report_data.get("images", [])):
-        raise ValueError("image cleanup changed pixels outside approved regions")
+    metadata_data = json.loads(metadata.read_text(encoding='utf-8'))
+    validate_cleanup_evidence(report_data, {item['id'] for item in metadata_data.get('images', [])})
     state.bind_artifact(job_dir, "clean_image_report", report)
     state.advance(
         job_dir,
@@ -329,6 +383,10 @@ def verify(
     visual_review_report: Path | None = None,
 ) -> None:
     job = state.load_job(job_dir)
+    if job['stage'] == 'verified':
+        # Official revalidation invalidates prior acceptance before inspecting it.
+        job['stage'] = 'assembled'
+        state.save_job(job_dir, job)
     if job["stage"] != "assembled":
         raise ValueError("verify requires assembled stage")
     candidate = _artifact(job, "candidate_pdf")
@@ -360,10 +418,11 @@ def verify(
     for key in ("untranslated_clear_image_labels", "unreported_confirm_items"):
         if int(visual.get(key, -1)) != 0:
             failed.append(key)
-    if visual.get("text_overlap_failures"):
-        failed.append("text_overlap_failures")
-    if visual.get("anchored_line_failures"):
-        failed.append("anchored_line_failures")
+    for key in ("text_overlap_failures", "anchored_line_failures",
+                "unreadable_text_failures", "missing_glyph_failures",
+                "content_failures", "clipping_failures", "structure_failures"):
+        if visual.get(key) != []:
+            failed.append(key)
     if not isinstance(visual.get("reviewed_anomaly_pages", []), list):
         failed.append("reviewed_anomaly_pages")
     candidate_hash = _sha256(candidate)
@@ -373,6 +432,27 @@ def verify(
         raise ValueError(
             "visual delivery gates failed: " + ", ".join(failed)
         )
+    # Reviews are the editable inputs to this stage; validate and rebind them
+    # below. Previously bound deterministic artifacts must remain unchanged.
+    state.assert_artifacts(job_dir, tuple(name for name in job['artifacts']
+                                       if name not in {'translation_review', 'visual_review', 'final_qa'}))
+    if not _manifest_complete(manifest):
+        raise ValueError('manifest translations incomplete or unsupported ocr-artifact suppression')
+    expected_by_page = {int(page['page']): {block['id'] for block in page['blocks']}
+                        for page in manifest_data['pages']}
+    inventory = json.loads(_artifact(job, 'image_inventory').read_text(encoding='utf-8'))
+    image_review = json.loads(_artifact(job, 'image_review').read_text(encoding='utf-8'))
+    metadata = json.loads(_artifact(job, 'image_metadata').read_text(encoding='utf-8'))
+    _validate_image_localization_review(image_review, metadata, {item['id'] for item in inventory['images']})
+    image_pages = {item['id']: int(item['page']) for item in inventory['images']}
+    for item in image_review['images']:
+        for label in item.get('labels', []):
+            expected_by_page[image_pages[item['id']]].add(f'{item["id"]}/{label["id"]}')
+    translation_path = job_dir / 'translation-review.json'
+    semantic = json.loads(translation_path.read_text(encoding='utf-8')) if translation_path.exists() else None
+    validate_translation_review(semantic, expected_by_page, job['source']['sha256'], candidate_hash)
+    cleanup = json.loads(_artifact(job, 'clean_image_report').read_text(encoding='utf-8'))
+    validate_cleanup_evidence(cleanup, {item['id'] for item in metadata.get('images', [])})
     selectability_report = job_dir / "selectability-report.json"
     selectable_args: list[object] = [
         Path(job["source"]["path"]), manifest, candidate, "--report", selectability_report,
@@ -384,8 +464,9 @@ def verify(
     _run("verify_selectable_output.py", *selectable_args)
     selectability = json.loads(selectability_report.read_text(encoding="utf-8"))
 
-    typography = {"passed": True, "not_applicable": True}
     rebuild_record = job["artifacts"].get("native_rebuild_report")
+    if not rebuild_record:
+        raise ValueError('missing native rebuild evidence')
     if rebuild_record:
         typography_report = job_dir / "typography-report.json"
         _run(
@@ -396,7 +477,8 @@ def verify(
         typography = json.loads(typography_report.read_text(encoding="utf-8"))
 
     report = {
-        "passed": True,
+        'evidence_version': 2,
+        "passed": False,
         "source_bound": True,
         "candidate": str(candidate),
         "source_sha256": job["source"]["sha256"],
@@ -410,7 +492,11 @@ def verify(
             and not selectability.get("unapproved_image_changes")
         ),
         "typography_passed": bool(typography.get("passed", False)),
-        "outside_region_pixel_changes": sum(int(item.get("outside_region_pixel_changes", 0)) for item in json.loads(_artifact(job, "clean_image_report").read_text(encoding="utf-8")).get("images", [])) if "clean_image_report" in job["artifacts"] else 0,
+        "warnings": typography.get("warnings", {}),
+        "outside_region_pixel_changes": sum(item['outside_region_pixel_changes'] for item in cleanup['images']),
+        "protected_pixel_changes": sum(item['protected_pixel_changes'] for item in cleanup['images']),
+        "translation_review": str(translation_path),
+        "translation_review_complete": True,
         "visual_review_complete": True,
         "all_pages_rendered": True,
         "reviewed_changed_regions": True,
@@ -420,11 +506,16 @@ def verify(
         "anchored_line_failures": [],
         "text_overlap_failures": [],
     }
+    report['passed'] = report['selectability_passed'] and report['typography_passed']
     report_path = job_dir / "final-qa.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     state.bind_artifact(job_dir, "final_qa", report_path)
+    state.bind_artifact(job_dir, 'translation_review', translation_path)
+    state.bind_artifact(job_dir, 'visual_review', visual_review_report)
+    if not report['passed']:
+        raise ValueError('final QA failed; candidate remains unverified')
     state.advance(
         job_dir, "verified", ("candidate_pdf", "final_qa")
     )

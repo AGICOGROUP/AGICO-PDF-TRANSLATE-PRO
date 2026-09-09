@@ -2,8 +2,9 @@
 
 ## Default and completion rule
 
-Engineering drawings use this mode by default, even when the request does not
-say “双语”. The business output is Chinese plus one other language.
+Engineering drawings use this mode by default only when the user has not
+explicitly requested monolingual replacement. The output is Chinese plus one
+other language. Explicit 单语 / 仅中文 follows replacement and skips this workflow.
 
 Before adding text, inventory both language sets. A drawing already containing
 Chinese and another language is complete only when every clear label is paired

@@ -8,10 +8,10 @@ engineering drawings that contain translatable text.
 Keep two independent layers:
 
 1. **Clean raster base:** original XObject pixels with only source text removed.
-2. **Vector text overlay:** translated English drawn by ReportLab with an
+2. **Vector text overlay:** requested target text drawn by ReportLab with an
    embedded TrueType font.
 
-Do not draw new English into a low-resolution image. Scaling the image will
+Do not draw target text into a low-resolution image. Scaling the image will
 blur the text and may make nearby drawing lines appear damaged.
 
 ## Metadata
@@ -53,7 +53,15 @@ points.
 
 `placement` is `[x, y, width, height]` in PDF points. `box` controls vector text
 placement. `clean_box` controls which raster pixels may change; keep it tighter
-when a leader line lies near the label.
+when a leader line lies near the label. For multi-line prose, use separate
+source-line cleanup regions (empty `text` allowed) plus a text placement region;
+never expand removal to the whole paragraph rectangle. Preserve signatures,
+seals and symbols with image-level `protected_boxes` in image-pixel coordinates.
+
+Use `role: body` for prose and `align: left|center|right` from the source. Body
+defaults to left/top; short labels retain centered placement unless specified.
+Provide paragraph-aware line breaks before fitting. A fit failure raises an
+error; it does not silently return a minimum size that still overflows.
 
 ## Cleanup modes
 
@@ -67,7 +75,8 @@ when a leader line lies near the label.
 | `ui_glyph` | Dark or light text on a colored software-UI fill; removes only contrasting glyph pixels and protects long dividers |
 | `ui_text_patch` | Preferred for compressed UI screenshots: reconstructs each tight word box row-by-row from its real left/right pixels, preserving scanlines, gradients, and horizontal dividers |
 | `anchored_line_restore` | Neutral text intersects a recoverable engineering line; clean glyphs, then restore only explicit opposite-edge anchors |
-| `text_only_area` | Entire box is text-only background; no drawing pixels |
+| `text_only_area` | Tight box is verified text-only background; no drawing pixels |
+| `solid_fill` | Verified text-only caption band, explicit `fill_rgb`; no frame, signature, seal or diagram artwork |
 
 Use `cyan_glyph` and `white_text_area` only as backward-compatible aliases for
 `text_only_area`.
@@ -83,8 +92,8 @@ For screenshots, prefer word-level OCR boxes with `ui_text_patch`; use
 reconstruction would remove. Do not use
 `text_only_area` over a colored toolbar, button, field, icon, border, or divider.
 
-Run at least two OCR scales for compressed screenshots: native resolution and
-3x-4x upscaled. Map all boxes back to native pixels before cleanup. Group
+Use one adequate-resolution OCR pass for screenshots; retry only uncertain
+or missed regions at 3x-4x scale. Map all boxes back to native pixels before cleanup. Group
 repeated screens into UI families and reuse reviewed boxes for fixed chrome
 such as `FOLDER/LOCATION` headers and function keys. A cropped XObject is a new
 variant: scale or redefine its template instead of reusing absolute coordinates.
@@ -112,8 +121,9 @@ python scripts/apply_image_vector_text.py `
   translated-native.pdf metadata.json translated-with-image-text.pdf
 ```
 
-Pass `--regular-font` and `--bold-font` when Arial or DejaVu Sans is not
-available.
+Pass `--regular-font` and `--bold-font` for fonts covering the requested script.
+The Windows defaults prefer CJK-capable fonts. Check target glyph coverage;
+availability of a Latin font is not proof that Chinese can render.
 
 ## Verification
 
@@ -122,10 +132,16 @@ available.
 - Protected saturated engineering pixels changed equal zero.
 - Clean image is embedded at the original page placement.
 - Every metadata `text` value appears in page text extraction.
-- A geometric overlap scan reports zero collisions between native text and
-  vector image-label text.
+- Investigate overlap flags between native and image-label text; only actual
+  obscured content or structural damage blocks delivery.
 - Pages outside the approved image set have identical content streams.
 - High-resolution render contains no source text, white-box damage, blur,
   overlap, or clipped label.
 - Difference and 50% alpha-overlay evidence has been inspected; every declared
   restored line passes continuity verification.
+
+The clean-base report measures `outside_region_pixel_changes` and
+`protected_pixel_changes`. Missing metrics are unverified, not zero. A zero
+outside-region count does not validate the region itself: review what is inside.
+Automatic long-rule screening catches some unsafe fills, not arbitrary lost
+artwork. Preserve and visually check the declared protected regions.

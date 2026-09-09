@@ -51,6 +51,52 @@ def test_open_pipes_are_not_a_table_cell():
         assert not cell_proposals(page, [dict(id='a', bbox=[30, 32, 100, 48])])
 
 
+def test_shared_cell_fields_receive_separate_layouts():
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=400, height=200)
+        page.draw_rect([20, 20, 300, 100])
+        records = [dict(id='a', bbox=[30, 32, 100, 48]),
+                   dict(id='b', bbox=[200, 32, 240, 48])]
+        proposals = cell_proposals(page, records)
+        assert proposals['a']['layout_box'][2] <= proposals['b']['layout_box'][0]
+        records[1]['bbox'] = [30, 70, 100, 85]
+        proposals = cell_proposals(page, records)
+        assert proposals['a']['layout_box'][3] <= proposals['b']['layout_box'][1]
+
+
+def test_image_structure_ignores_unused_resources_but_detects_moved_image(tmp_path):
+    import native_cad_pipeline as cad
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=200, height=100)
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 3, 3), False)
+        pix.clear_with(100)
+        page.insert_image([20, 20, 40, 40], pixmap=pix)
+        expected = cad.page_snapshot(page)
+        equivalent = dict(expected, image_count=99)
+        assert cad.same_page_structure(expected, equivalent)
+        with pymupdf.open() as other:
+            target = other.new_page(width=200, height=100)
+            target.insert_image([30, 20, 50, 40], pixmap=pix)
+            assert not cad.same_page_structure(expected, cad.page_snapshot(target))
+        assert not cad.same_page_structure(expected, dict(expected, painted_images=[]))
+
+
+def test_displaylist_review_crops_match_page_render(tmp_path):
+    import cad_batch
+    source = tmp_path/'source.pdf'
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=200, height=100)
+        page.insert_text((20, 30), 'Dimension 300')
+        page.draw_line((10, 40), (190, 40), color=(1, 0, 0))
+        doc.save(source)
+    records = [dict(id='a', page=0, source='Dimension 300', bbox=[20, 10, 120, 45])]
+    cad_batch.review_bundle(source, tmp_path/'review', records)
+    with pymupdf.open(source) as doc:
+        expected = doc[0].get_pixmap(matrix=pymupdf.Matrix(2, 2), clip=[12, 2, 128, 53], alpha=False)
+        actual = pymupdf.Pixmap(str(tmp_path/'review/region-0-source.png'))
+        assert expected.samples == actual.samples
+
+
 def test_supplement_keeps_existing_ids_and_adds_only_missing_regions():
     existing = [dict(id='p0001-o00001', page=0, source='Vent', bbox=[10, 10, 30, 30])]
     proposals = [dict(source='Vent', bbox=[11, 11, 31, 31]),

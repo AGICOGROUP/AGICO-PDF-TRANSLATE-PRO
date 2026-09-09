@@ -1,6 +1,6 @@
 ---
 name: translate-scan-pdf-professionally
-description: Use when translating scan-only or image-only PDFs whose text cannot be selected, especially engineering drawings that must default to selectable Chinese-plus-foreign-language overlay, diagrams, title blocks, legends, logos, manuals, tables, screenshots, headers, or footers.
+description: Use when translating raster or scanned PDFs, including scans with a hidden copyable OCR layer, whose visible text and non-text artwork must be preserved in translated layout.
 ---
 
 # Professional Scan PDF Translation
@@ -18,11 +18,12 @@ changing visible pixels, then classify again.
 
 ## Engineering-drawing default
 
-When the PDF router reports `document_kind: engineering-drawing`, always use
-additive bilingual mode. Preserve every source pixel and add selectable target
-text; ordinary wording such as “翻译为中文版” does not authorize replacement.
+Follow the router's `translation_mode`. Engineering drawings default to additive
+bilingual mode only when no explicit monolingual requirement was given. Explicit
+单语 / 仅中文 / replacement uses `replace`; never switch it to bilingual as a
+cleanup shortcut. Hidden OCR alone still reports `scan-only` in both classifiers.
 
-Inventory all clear Chinese and foreign labels and run the PDF-level
+For `add_bilingual` only, inventory clear Chinese and foreign labels and run the PDF-level
 `scripts/decide_drawing_translation.py --inventory-file
 <drawing-language-inventory.json>`. If it returns
 `already_bilingual_complete`, preserve and deliver the exact source PDF and mark
@@ -41,16 +42,16 @@ Read these files before acting:
 - `references/workflow.md` for the complete execution order and image-text handling rules.
 - `references/manifest-schema.md` before creating or editing the translation manifest.
 - `references/quality-gates.md` before review and delivery.
-- `references/additive-bilingual-drawings.md` for every engineering drawing or
-  when the user asks to retain Chinese and add selectable target-language labels.
+- `references/additive-bilingual-drawings.md` only for `add_bilingual` output.
 - `references/cement-terminology.md` only through
   `scripts/glossary_lookup.py` when cement-industry terms or sentences occur.
 
 Use an isolated job directory named with the source SHA-256 prefix. Never modify the source PDF.
 
 1. Classify the source and fingerprint it.
-2. Render every required page at 400 DPI and run dual-scale OCR with
-   `scripts/extract_scan.py`; batching page ranges is allowed.
+2. Use `scripts/extract_scan.py` at adequate resolution with supported options.
+   Reuse cached extraction; do not require dual-scale OCR on every page.
+   Retry only uncertain or missed regions. Batching page ranges is allowed.
    Reuse the same extraction directory when resuming. The extractor checkpoints
    each completed page and validates source/configuration/render hashes before
    reuse. Do not restart successful pages or manually concatenate batch reports.
@@ -94,7 +95,9 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    page for contextual accuracy, including OCR omissions. Save the adapter-owned
    `translation-review.json`; visual sampling and block coverage do not replace
    this semantic review. Resolve accuracy findings before delivery.
-8. Run `scripts/verify_scan.py`. Deliver only when it exits successfully and its report says `passed: true`.
+8. Run `scripts/verify_scan.py` for completed delivery. Apply
+   `../../../references/delivery-policy.md` for severity and budget-limited
+   preview delivery. Keep the real failed/unverified report for previews.
    The verifier reads `translation-review.json` beside the visual review, or the
    explicit `--translation-review` path. Missing, stale, incomplete or unresolved
    semantic evidence fails verification. A schema-valid review is still not proof
@@ -103,12 +106,13 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
 
 ## Time budget without quality shortcuts
 
-For a 38-page scan job target 60 minutes including OCR, translation, layout,
-semantic review, rendering and delivery. Record actual wall time from task start,
+Budget at most 120 seconds per selected page (10 pages: 20 minutes), including
+OCR, translation, layout, semantic review and delivery. Record wall time from task start,
 excluding only explicit user pauses, and each stage's timings. Use the first
 three representative OCR pages to estimate remaining work; report projected
-overruns early. The deadline never authorizes lowering DPI, skipping review,
-preserving readable prose, summarizing, or shrinking body text below readability.
+overruns early. At the limit stop automatic repair loops and provide a labelled
+readable preview with actual defects if final acceptance is incomplete. Choose
+DPI for legibility. Never fabricate reviews, omit content or hide unreadability.
 
 Use one persistent OCR job directory and the builder's hash-validated lossless
 base cache. A wording-only correction reuses its base; cleanup/layout/source
@@ -171,14 +175,17 @@ one-to-one source-label translations with a summary panel.
 - Treat icons as immutable artwork. Preserve them in place or reuse exact source pixels; never redraw them, replace them with text, or choose a similar glyph/icon from a library.
 - Preserve mixed source-language emphasis and color changes with `rich_lines` text runs when they carry meaning or navigation cues.
 - A translated label may be shorter, smaller, or reflowed, but never clipped, omitted, or placed over structure.
-- Clear Chinese inside images, logos, UI screenshots, headers, and footers must
-  be translated unless it belongs to a strictly proven complete bilingual
-  region. Illegible text may be preserved only with an explicit review record.
+- Clear source-language text inside images, logos, UI screenshots, headers and
+  footers must be translated to the requested language. Chinese target text is
+  expected, not a source-language residue. Complete bilingual preservation is
+  available only in bilingual mode. Illegible text needs a located review record.
 - OCR confidence never replaces visual review. OCR false positives require exact bounding-box evidence and a documented reason.
-- Zero unreviewed pages, zero unreviewed images, zero icon substitutions, zero mixed-color failures, zero overlap/clipping findings, zero unexplained CJK residuals, and zero pixel changes outside approved cleanup regions.
-- Approved CJK inside a hash-bound `bilingual_complete` region or an assigned
-  `add_bilingual` source box is expected. Clear Chinese without a paired target
-  label remains a delivery failure.
+- Review all readable content; block actual omissions, icon substitutions,
+  meaningful color loss, unreadable overlap/clipping and structural damage.
+  Cosmetic and numeric typography deviations are warnings under the shared policy.
+- In bilingual mode, preserved source text inside a reviewed paired region is
+  expected; an unpaired readable source label remains a content failure. In
+  replacement mode inspect unexpected source-language residue, not all CJK.
 - For English output, cement glossary hits must use the selected English lexical
   form. For other target languages, retain the selected English concept in the
   job glossary as the semantic pivot and use one consistent professional target
@@ -190,4 +197,7 @@ Use the Python interpreter available in the current runtime. Install `scripts/re
 
 ## Stop Conditions
 
-Stop and redesign the affected page when cleanup blurs or removes nearby structure, the exact source icon cannot be recovered, a translation cannot fit above the minimum size, a line cannot be reconstructed from reliable anchors, or QA cannot distinguish a residual glyph from artwork. Record irrecoverable icons as `preserve_confirm`; do not invent substitutes or lower the gate to force delivery.
+Repair actual content/readability/structure defects within the shared time
+budget. Numeric font deviations alone do not require redesign. At the limit,
+provide a labelled preview with known defects rather than looping indefinitely.
+Preserve and report genuinely unreadable regions; never invent substitutes.

@@ -16,7 +16,7 @@ python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json"
 
 ## 2. OCR inventory and translation
 
-Use both 1x and 3x OCR results merged by geometry. Visually compare the 400-DPI render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
+Use cached single-scale OCR first. Retry only uncertain pages with --dual-scale or inspect uncertain crops at higher resolution. Visually compare the source render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
 
 Each completed page is saved atomically in `extract/page-checkpoints/` before
 the next OCR page begins. Resume with the same command/output directory; valid
@@ -27,7 +27,7 @@ Per-page progress and report `elapsed_seconds` provide real timing evidence.
 The top-level `elapsed_seconds` is this invocation only. Cached pages retain
 their original processing duration. Neither field includes earlier failed
 attempts, and neither proves total translation time. Keep an independent task
-start timestamp and include retries when assessing the 60-minute target.
+start timestamp and include retries when assessing the 120-second-per-page budget.
 
 Use the draft groups to translate prose with the complete ordered page as
 context and return one translation per region ID. A normal prose page should
@@ -52,7 +52,7 @@ split sentences, use the whole page and glossary in every translation batch,
 and confirm OCR corrections against the source pixels. Adjacent pages provide
 context when content continues across a page boundary.
 
-Before translating a diagram, inventory all clear Chinese labels and their
+In additive bilingual mode, inventory all clear Chinese labels and their
 nearby target-language counterparts. Preserve the diagram as `bilingual_complete` only
 when every Chinese label is paired. Some target-language text on the image is insufficient;
 translate every unmatched Chinese label.
@@ -93,11 +93,12 @@ semantic function and source hierarchy, not OCR-box height alone. Titles are
 normally bold or larger, body is regular and dominant, and annotation is regular
 and smaller. When all three occur, preserve `title > body > annotation`.
 
-Fit groups independently. If one body region needs a smaller size, reduce every
-body region on that page to the same largest common fitting size. A caption,
-drawing label, header, footer, or table cell must never lower the common body
-size. If target text still cannot fit at the
-readable floor, record the fit failure before using a page `layout_adjustment`.
+Fit complete paragraphs at the page group's baseline with wrapping first. Only
+an overflowing paragraph may shrink, uniformly as a whole; record its baseline,
+fitted size and reason. Other paragraphs retain the baseline. A caption, drawing
+label, header, footer or table cell must not reduce body text size. Actual
+unreadability, not a numeric reference floor, requires correction. Record a real
+fit failure before using a page `layout_adjustment`.
 Try shifting a large image first, then proportional shrink. The old image area
 must be verified uniform background and both old and new boxes become approved
 difference regions.
@@ -142,4 +143,4 @@ headers, footers, and icons. Create `visual-review.json` using the contract in
 python scripts/verify_scan.py --source "input.pdf" --manifest "job/manifest/translation-manifest.json" --pdf "job/output/translated.pdf" --visual-review "job/review/visual-review.json" --report "job/qa/final-qa.json"
 ```
 
-If QA fails, correct the smallest affected block and rerun build, render review, and verification. Never reuse stale visual-review evidence after changing the PDF.
+If QA finds a blocking content/readability/structure issue, correct the affected block within the shared time budget. Re-render only affected pages and retain traceable unchanged-page reviews. Cosmetic warnings do not trigger repeated rebuilds. At the limit share a labelled preview with known issues.

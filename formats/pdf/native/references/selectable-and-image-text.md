@@ -34,13 +34,13 @@ resolution. The accepted invariant is:
 
 1. Work from the original embedded image, never a screenshot of a translated
    PDF.
-2. Locate the exact Chinese glyph bounds.
+2. Locate the exact source-language glyph bounds.
 3. Build a glyph mask from neutral or label-color pixels.
 4. Protect process-line colors and any structural component crossing the text
    region.
 5. Remove glyph pixels only and save a clean raster base.
 6. Reinsert the clean image at the exact original page geometry.
-7. Add compact English as an embedded PDF vector text layer mapped from image
+7. Add the requested target text as an embedded PDF vector layer mapped from image
    pixel coordinates to page coordinates.
 8. Compare source/clean arrays and fail on any unexpected pixel change.
 
@@ -50,11 +50,11 @@ equipment, rules, arrows, or process lines.
 
 ## Selectability and image QA checklist
 
-- Native source text remains extractable and selectable.
+- Translated native text remains extractable and selectable.
 - No original source text survives invisibly below overlays.
-- No extractable CJK remains.
-- All clear image labels are English.
-- Image-label English is extractable, selectable, and remains sharp when zoomed.
+- No unexpected source-language residue remains; Chinese output contains CJK.
+- All clear image labels use the requested target language.
+- Image-label target text is extractable, selectable and sharp when zoomed.
 - Genuinely illegible labels are logged instead of guessed.
 - Image pixels outside approved text regions are byte-identical.
 - Saturated engineering-line pixels are unchanged.
@@ -91,11 +91,10 @@ Use these invariants:
 8. Keep semantic role and font weight separate. A heading role does not grant
    bold. Use the source run/font evidence; if the PDF metadata cannot represent
    a visually verified weight, set a block-level `source_bold_override`.
-9. Do not use the smallest paragraph as the page-wide body size. Use a median
-   fitted baseline. Before shrinking one paragraph independently, apply the
-   page-level adaptive layout procedure below. Native body text should stay at
-   or above `max(9.5 pt, 60% of source size)` unless the entire page is
-   genuinely dense. Tighten the English wording before crossing that floor.
+9. Use one source-derived baseline per page typography group. Wrap first; only
+   an overflowing paragraph may shrink uniformly, with baseline, fitted size
+   and reason recorded. Other paragraphs retain the baseline. The reference
+   `max(9.5 pt, 60% of source size)` is diagnostic, not a hard gate.
 10. Treat new numbered items as paragraph boundaries, but do not mistake decimal
     values such as `0.5` for list numbers. Semicolon-separated equipment lists
     remain one flow.
@@ -138,12 +137,12 @@ Use this order:
    the image. Move its caption with it, retain reading order, and leave about
    8–12 pt clearance from text and neighboring objects.
 4. Merge reviewed paragraph flows or add safe text slots in the reclaimed area,
-   then tighten redundant English without deleting technical meaning.
-5. If the page is still genuinely dense, use one smaller body size across that
-   page instead of a patchwork of unrelated sizes. Keep heading levels
-   consistent and distinct.
-6. Only after these options fail, use a continuation page or report the layout
-   limitation.
+   then tighten redundant target wording without deleting technical meaning.
+5. Fit only genuinely overflowing paragraphs at a smaller uniform paragraph
+   size; do not shrink unrelated body text. Keep heading hierarchy and actual
+   readability. Cosmetic differences do not require another reconstruction.
+6. If the content still cannot fit safely, report the limitation. Additional
+   pages require user approval, not an automatic continuation-page fallback.
 
 This is an adaptive decision sequence, not permission to redesign arbitrarily:
 keep page count, visual hierarchy, object order, colors, and source identity

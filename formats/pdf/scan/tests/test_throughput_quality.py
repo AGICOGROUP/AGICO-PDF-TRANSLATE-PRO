@@ -155,7 +155,7 @@ def test_ocr_resume_keeps_completed_page_after_failure(tmp_path, monkeypatch):
     def fake_pass(engine, image, scale):
         nonlocal count
         count += 1
-        if count == 3:
+        if count == 2:
             raise RuntimeError('simulated OCR allocation failure on page 2')
         return [{'box': [1, 1, 20, 10], 'quad': [[1, 1], [20, 1], [20, 10], [1, 10]],
                  'rotation': 0, 'text': 'Texto', 'score': 1, 'scale': scale}]
@@ -166,7 +166,7 @@ def test_ocr_resume_keeps_completed_page_after_failure(tmp_path, monkeypatch):
     assert resumed['pages'][0]['ocr_cache_hit'] is True
     assert len(resumed['source_lines']) == 2
     assert [row['id'] for row in resumed['source_lines']] == ['p01-l001', 'p02-l001']
-    assert count == 5  # Two completed passes are not repeated after the failure.
+    assert count == 3  # One completed pass is not repeated after the failure.
     (tmp_path / 'job' / 'source-pages-72dpi' / 'source-page-01.png').write_bytes(b'broken')
     repaired = extract_scan.extract_selected_pages(source, [1, 2], tmp_path / 'job', dpi=72)
     assert repaired['pages'][1]['ocr_cache_hit'] is True

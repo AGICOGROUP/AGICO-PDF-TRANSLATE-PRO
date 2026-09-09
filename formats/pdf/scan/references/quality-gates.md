@@ -1,74 +1,27 @@
-# Scan PDF final gates
+# Scan PDF acceptance
 
-The verifier requires the official scan builder identity and matching source,
-manifest, and output hashes. It also rejects unassigned source lines and any
-translation whose reading direction differs from its source, including
-rotation internal to a raster page.
-It rejects remote bilingual placements: direct labels must be near their source,
-and companion panels must be adjacent to their declared table/title/legend
-anchor so every correspondence is immediately traceable.
+Apply [the shared delivery policy](../../../../references/delivery-policy.md).
+The three blocking requirements are correct content, complete/readable output
+and intact key structure. Coverage, selectable text, page geometry, meaningful
+color, icon provenance and cleanup checks provide evidence for them.
 
-These gates run once at the end of the scan adapter. They do not inherit native
-PDF or standalone-image gates.
+Source-relative minimum font sizes are warnings. Actual unreadability,
+missing glyphs, meaningful overlap/clipping and structural damage still block
+completed delivery. A warning is not permission to omit or summarize text.
 
-## Visual-review evidence
+Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
+reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,
+clipping_failures, unreadable_text_failures and untranslated_clear_labels.
+Only record observed findings; a missing check is not a zero result.
+Render initial page coverage, then only affected pages after corrections;
+reuse unchanged-page evidence with content identity.
 
-Create this against the exact final PDF after the one final render:
+verify_scan.py also reads translation-review.json beside the visual review
+(or --translation-review). Review every page against the original, including
+OCR omissions. Keep current hashes, reviewed source IDs, actual context and
+unresolved findings. Never generate passing entries from counts or merely
+rebind old hashes. Automated validation cannot establish semantic accuracy.
 
-```json
-{
-  "candidate_sha256": "<64-character SHA-256>",
-  "all_pages_rendered": true,
-  "reviewed_changed_regions": true,
-  "reviewed_anomaly_pages": [],
-  "text_overlap_failures": [],
-  "clipping_failures": [],
-  "untranslated_clear_labels": 0
-}
-```
-
-`reviewed_anomaly_pages` lists every page flagged by automatic checks after it
-has been reviewed. An empty list is valid when there were no anomalies.
-
-## Seven final gates
-
-1. OCR and translation coverage: every source-line ID is assigned exactly once
-   and every required translated block is rendered.
-2. Translation integrity: terminology, numbers, models, units, and meaningful
-   colors are preserved; replacement mode has zero unexplained source-language
-   residue and additive mode has no unmatched clear source label.
-   Require page-by-page semantic accuracy review using
-   `../../../../references/page-context-translation-review.md`. The adapter-owned
-   `translation-review.json` must cover every selected page, bind current source
-   and candidate hashes, and contain no unresolved issues. This agent review
-   includes original source pixels and is not inferred from OCR/block coverage
-   or the automated verifier's passing result.
-3. Text-layer validity: added target text is extractable/selectable, uses
-   embedded fonts, and contains no missing glyphs.
-4. Page integrity: page count, order, dimensions, and orientation match the
-   selected source pages.
-5. Graphic integrity: automatic build evidence reports zero changes outside
-   approved regions and exact-source provenance for restored icons/crops.
-6. Layout safety: automatic and exception review reports zero overlap,
-   clipping, below-minimum text, or protected-structure coverage. Page-level
-   typography evidence must show one common baseline size for every title group,
-   one for body, and one for annotation. Tables, headers, and footers use
-   independent groups. Only a complete overflowing paragraph may shrink below
-   its baseline; record the paragraph, original size, fitted size and reason.
-   Other paragraphs must retain the baseline. When present together, title is larger than body and body
-   is larger than annotation. Annotation fitting must not reduce body size.
-7. Final render: render the completed PDF once, automatically check all pages,
-   and manually inspect only changed regions and anomaly pages.
-
-The verifier must bind review evidence to the exact candidate SHA-256. Any
-output change invalidates the evidence. One gate may aggregate several cheap
-automatic assertions; it must not trigger another adapter's workflow or a
-second full-document render.
-
-`verify_scan.py` reads `translation-review.json` beside `--visual-review` by
-default, or accepts `--translation-review <path>`. It checks both hashes, adapter,
-ordered page coverage, exact reviewed source IDs and absence of unresolved issues.
-These checks validate the record, not the truth of a translator's assertions.
-Record actual source-to-target review; generic copied passing entries and hash-only
-updates do not constitute review. Existing completed PDFs must not be retroactively
-described as semantically verified merely because their technical QA passed.
+At 120 seconds per selected page stop repair loops. Completed output requires
+passed verification. Otherwise provide a clearly named preview with its real
+failed/unverified report and known issues, never a fabricated passing report.

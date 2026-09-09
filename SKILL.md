@@ -1,11 +1,15 @@
 ---
 name: translate-documents-and-images-professionally
-description: Use when professionally translating native-text PDFs, scan-only/image-only PDFs, or static PNG and JPEG images while preserving layout, text, graphics, tables, colors, and engineering structure. Routes each input to one specialized workflow and supports bilingual PDF overlay mode.
+description: Use when translating PDFs or static PNG/JPEG images whose professional meaning, page layout, tables, graphics and selectable target text must be preserved.
 ---
 
 # Professional Document and Image Translation Router
 
 This repository supports PDF, PNG, JPG, and JPEG inputs.
+
+Read `references/delivery-policy.md` for the three blocking requirements,
+nonblocking cosmetic diagnostics, incremental review and 120-second-per-page
+scan budget. Apply this shared acceptance policy in the selected adapter.
 
 Choose exactly one adapter from the actual file format:
 
@@ -14,22 +18,14 @@ Choose exactly one adapter from the actual file format:
 
 Reject unsupported formats, animated images, and multi-page image containers. Never merge adapter workflows. File format selects the top-level adapter; PDF content inspection selects the PDF sub-adapter.
 
-**Replacement vs. bilingual overlay:** The native, native-CAD, and scan adapters replace
-source text with translation — the final document contains only the target
-language. The bilingual overlay adapter preserves all source text unchanged and
-adds translations in surrounding whitespace — the final document contains both
-languages side by side. Choose based on what the user asks for: "translate
-this PDF" → replacement; "keep the original and add translation" / "bilingual"
-/ "双语版" / "中英对照" → bilingual overlay.
-
-Engineering drawings default to bilingual overlay for ordinary translation
-wording. If the user explicitly requires the source text removed or replaced
-so that only the translation remains, native-text or mixed engineering drawings
-use the specialized `formats/pdf/native-cad/SKILL.md` execution adapter. This
-adapter is selected from the combined content, document-kind, and output-mode
-conditions; it is not a fourth PDF content classification.
+Output mode follows the user's explicit requirement. Monolingual / 单语 / 仅中文
+means `replace`, including engineering drawings; preserve-original / 双语 means
+`bilingual`. With no explicit mode, use `auto`: ordinary documents replace text,
+engineering drawings add bilingual text. Scan supports either mode; native-CAD
+is specialized replacement for native/mixed engineering drawings. Determine
+content with the router, not with the output-language wording.
 
 If a drawing routed to bilingual mode is already a complete
 Chinese-plus-one-foreign-language version, preserve the exact source and mark
-the task completed. The drawing workflow runs automatically without an
-in-process language confirmation.
+the task completed only in bilingual mode. This shortcut never satisfies an
+explicit monolingual request. Do not ask for redundant language confirmation.

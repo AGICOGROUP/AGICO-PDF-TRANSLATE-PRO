@@ -55,12 +55,16 @@ def main() -> None:
     body_floor_violations = []
     header_footer_size_mismatches = []
     checked_draws = 0
+    drawn_ids = set()
 
     for item in rebuild.get("blocks", []):
         block_ids = list(dict.fromkeys(BLOCK_ID_RE.findall(str(item.get("id", "")))))
         blocks = [source_blocks[block_id] for block_id in block_ids if block_id in source_blocks]
         if not blocks:
             continue
+        if item.get('draws'):
+            drawn_ids.update(block_ids)
+            checked_draws += len(item['draws'])
         role = str(item.get("role", ""))
         is_cell = str(item.get("id", "")).startswith("cell:")
         expected_weights = {bool(block["style"].get("bold")) for block in blocks}
@@ -70,7 +74,6 @@ def main() -> None:
         expected_bold = next(iter(expected_weights)) if len(expected_weights) == 1 else None
         source_size = max(float(block["style"].get("size", 9)) for block in blocks)
         for draw in item.get("draws", []):
-            checked_draws += 1
             actual_bold = bool(draw.get("bold"))
             if expected_bold is not None and actual_bold != expected_bold:
                 bold_mismatches.append(
@@ -112,7 +115,7 @@ def main() -> None:
         "body_floor_violations": body_floor_violations,
         "header_footer_size_mismatches": header_footer_size_mismatches,
     }
-    result["passed"] = not any(
+    result["typography_matches_source"] = not any(
         result[key]
         for key in (
             "bold_mismatches",
@@ -121,6 +124,21 @@ def main() -> None:
             "header_footer_size_mismatches",
         )
     )
+    # Source-relative metrics diagnose style differences, not actual legibility.
+    # Missing glyphs, obscured content and unreadability remain visual blockers.
+    result["warnings"] = {
+        key: result[key] for key in (
+            "bold_mismatches", "mixed_weight_flows", "body_floor_violations",
+            "header_footer_size_mismatches",
+        ) if result[key]
+    }
+    expected_ids = {key for key, block in source_blocks.items()
+                    if str(block.get('source_text', '')).strip()}
+    result['undrawn_source_ids'] = sorted(expected_ids - drawn_ids)
+    result['status'] = 'checked' if checked_draws else 'unverified' if expected_ids else 'not_applicable'
+    if not checked_draws:
+        result['typography_matches_source'] = None
+    result["passed"] = not result['undrawn_source_ids']
     Path(args.report).write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

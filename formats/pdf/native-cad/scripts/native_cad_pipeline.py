@@ -71,6 +71,11 @@ def page_snapshot(page: pymupdf.Page) -> dict[str, object]:
         "height": round(page.rect.height, 4),
         "rotation": int(page.rotation),
         "image_count": len(page.get_images(full=True)),
+        "painted_images": sorted([
+            {'digest': item['digest'].hex(),
+             'transform': [round(float(v), 4) for v in item['transform']]}
+            for item in page.get_image_info(hashes=True)
+        ], key=lambda item: (item['digest'], item['transform'])),
         "vector_count": len(page.get_drawings()),
     }
 
@@ -528,9 +533,12 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
 def same_page_structure(expected: dict[str, object], actual: dict[str, object]) -> bool:
     stable_fields_match = all(
         expected[key] == actual[key]
-        for key in ("width", "height", "rotation", "image_count")
+        for key in ("width", "height", "rotation")
     )
-    return stable_fields_match and int(actual["vector_count"]) >= int(expected["vector_count"])
+    images_match = (expected['painted_images'] == actual.get('painted_images')
+                    if 'painted_images' in expected
+                    else expected['image_count'] == actual['image_count'])
+    return stable_fields_match and images_match and int(actual["vector_count"]) >= int(expected["vector_count"])
 
 
 def write_review_template(job_dir: Path, candidate_hash: str) -> None:
@@ -561,11 +569,17 @@ def verify(
     if not apply_report.get("passed") or apply_report.get("candidate_sha256") != candidate_hash:
         failures.append("candidate_not_bound_to_apply_report")
     try:
+        source_snapshots = inventory['pages']
+        if any('painted_images' not in snapshot for snapshot in source_snapshots):
+            with pymupdf.open(bound_source) as original:
+                source_snapshots = [page_snapshot(page) for page in original]
         document = pymupdf.open(candidate)
         if document.page_count != inventory.get("page_count"):
             failures.append("page_count_mismatch")
         elif any(
-            not same_page_structure(expected, page_snapshot(document[index]))
+            not same_page_structure(
+                expected if 'painted_images' in expected else source_snapshots[index],
+                page_snapshot(document[index]))
             for index, expected in enumerate(inventory["pages"])
         ):
             failures.append("page_structure_mismatch")

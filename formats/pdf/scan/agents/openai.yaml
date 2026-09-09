@@ -1,4 +1,4 @@
 interface:
   display_name: "Professional Scan PDF Translation"
   short_description: "Translate scan PDFs or add selectable bilingual labels while preserving drawing pixels."
-  default_prompt: "Use $translate-scan-pdf-professionally to translate this scan-only PDF. Default engineering drawings to automatic additive bilingual mode, skip complete Chinese-plus-foreign bilingual drawings, preserve source pixels and engineering structure, and pass all visual gates."
+  default_prompt: "Use $translate-scan-pdf-professionally for scanned PDFs including hidden-OCR scans. Honor the requested target language and explicit monolingual mode; only unspecified engineering-drawing modes default to bilingual. Reuse valid OCR and clean bases, protect artwork, and deliver against content, readability and structure requirements within the scan time budget."

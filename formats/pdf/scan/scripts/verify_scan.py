@@ -296,6 +296,8 @@ def evaluate_evidence(
         "unassigned_source_lines": unassigned_source_lines,
         "official_pipeline": official_pipeline,
     }
+    report["warnings"] = {"minimum_font_failures": minimum_font_failures} if minimum_font_failures else {}
+    report["unreadable_text_failures"] = visual_review.get("unreadable_text_failures", [])
     report["passed"] = all(
         [
             not report["manifest_error"],
@@ -303,7 +305,7 @@ def evaluate_evidence(
             not report["missing_rendered_blocks"],
             not report["missing_translation_blocks"],
             not report["incomplete_render_blocks"],
-            not report["minimum_font_failures"],
+            not report["unreadable_text_failures"],
             report["unexpected_source_language"] == 0,
             report["output_page_count"] == report["expected_output_page_count"],
             report["page_geometry_match"],
@@ -330,6 +332,26 @@ def _word_in_regions(word: dict, regions: list[tuple[float, float, float, float]
     return any(x0 <= center_x <= x1 and y0 <= center_y <= y1 for x0, y0, x1, y1 in regions)
 
 
+def words_materially_overlap(first: dict, second: dict) -> bool:
+    """Return true only when two word boxes share material glyph area.
+
+    PDF font ascent/descent boxes from adjacent lines commonly touch by one or
+    two points even though the rendered glyphs do not.  Requiring overlap in a
+    meaningful fraction of the smaller word box avoids treating that normal
+    line-leading contact as a collision.
+    """
+    if first.get("upright") is not None and second.get("upright") is not None:
+        if bool(first["upright"]) != bool(second["upright"]):
+            return False
+    x_overlap = min(first["x1"], second["x1"]) - max(first["x0"], second["x0"])
+    y_overlap = min(first["bottom"], second["bottom"]) - max(first["top"], second["top"])
+    if x_overlap <= 0.7 or y_overlap <= 0.7:
+        return False
+    smaller_width = min(first["x1"] - first["x0"], second["x1"] - second["x0"])
+    smaller_height = min(first["bottom"] - first["top"], second["bottom"] - second["top"])
+    return x_overlap >= smaller_width * 0.2 and y_overlap >= smaller_height * 0.2
+
+
 def extract_output_text(
     pdf_path: Path,
     source_pages: list[int],
@@ -354,9 +376,7 @@ def extract_output_text(
                         continue
                     if second["top"] > first["bottom"] + 1:
                         continue
-                    x_overlap = min(first["x1"], second["x1"]) - max(first["x0"], second["x0"])
-                    y_overlap = min(first["bottom"], second["bottom"]) - max(first["top"], second["top"])
-                    if x_overlap > 0.7 and y_overlap > 0.7:
+                    if words_materially_overlap(first, second):
                         overlap_failures.append(
                             {
                                 "output_page": index + 1,

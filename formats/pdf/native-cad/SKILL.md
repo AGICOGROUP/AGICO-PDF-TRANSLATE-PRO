@@ -36,8 +36,15 @@ Use the supplied commands instead of writing document-specific helper scripts.
 ## Translate and place in batches
 
 Keep IDs and source unchanged; record corrections in source_correction and
-review_note. Translate complete contextual labels. Reuse repeated wording after
-checking equipment and local meaning. Mark confirmed tags or existing target
+review_note. Before translation, read continuous technical requirements as a
+whole and reconcile overlapping OCR fragments. Reflow each complete numbered
+clause once within its reviewed whitespace, retaining numbering, subclauses,
+all constraints, values and units. Do not summarize clauses, combine unrelated
+fields, or infer missing limits from engineering convention. Keep original
+records traceable; dismiss a duplicate only when its complete content is covered
+by the retained record. Translate dimension qualifiers such as hot/cold condition;
+only the numeric or identifier portion is language-independent.
+Reuse repeated wording after checking equipment and local meaning. Mark confirmed tags or existing target
 text preserved with a reason; dismissed is for reviewed OCR false positives,
 never unread or inconvenient prose.
 
@@ -49,6 +56,10 @@ source_overflows_cell. It is a proposal, not approval:
   estimate a script boundary from character counts: it clips English letters.
 - Inspect all members first. Identifiers, numbers and separate fields stay
   distinct; never let several records independently cover the same cell.
+  Shared cells now propose separate member layout boxes; overlapping OCR still
+  requires reconciliation. For native company names, also set layout_box inside
+  the actual title cell and clear of the logo, rather than accepting a source
+  bounding box that protrudes outside the page.
 - Keep covers inside borders. If source_overflows_cell is true, inspect the
   actual protruding glyphs once and preserve neighboring data and structures.
 - With a genuine gap and an accurate existing target, an outline record may
@@ -73,6 +84,9 @@ layout_box for reviewed adjustments. Visual replacement is not secure deletion.
 Use consistent semantic roles: title, body (including ordinary table text),
 annotation. One page/role baseline applies, title > body > annotation; only
 a whole overflowing paragraph shrinks. Prefer safe whitespace before shrinking.
+OCR box height is an estimate, not a calibrated font size. Inspect representative
+body, title and annotation regions before applying. Do not force all drawings to
+8.5 pt or halve every estimated size based on a single document.
 Legacy table/footer roles remain supported, not arbitrary font-size groups.
 
 Apply checks unique translated characters against the requested font before
@@ -104,10 +118,17 @@ Record only observations actually made; do not mark all regions reviewed from
 an overview or a sample of crops.
 
 Collect defects before editing, then rebuild once and inspect changed regions
-and the complete page. Unchanged review bundles are hash-cached. Aim for one
+and the complete page. Review rendering reuses one display list per page and
+retains every record, including preserved/dismissed records that may hide errors.
+Unchanged review bundles are hash-cached. Aim for one
 initial candidate and one consolidated repair. This is a throughput goal, not a
-hard retry gate or permission to deliver defects. Avoid repeated box nudges and
-whole-document reviews for one local correction; fix the cause.
+hard retry gate or permission to deliver defects. Inspect local crops while
+resolving a batch of defects; regenerate the full residual review after the batch.
+Avoid repeated box nudges and whole-document reviews for one local correction.
+Put corrections in the inventory/packet and rebuild reproducibly. Never hand-edit
+apply/review hashes, add dummy objects to pass checks, or mark uninspected regions
+as reviewed. Structure verification compares painted image content and placement,
+allowing unused/duplicate resource cleanup while detecting lost or moved images.
 
 Complete visual-review.json from actual review using the apply-generated
 template and exact candidate hash. See [quality-gates.md](references/quality-gates.md).
@@ -119,5 +140,8 @@ python scripts/native_cad_pipeline.py verify <job> --candidate <job>/translated-
 
 Deliver only after final QA passes and source-to-target findings are resolved.
 Report full elapsed time separately from OCR/apply/review seconds. Cached
-replays are not fresh translation timings. Run code tests when changing scripts,
+replays are not fresh translation timings. The target is a 50% reduction in full
+elapsed time with equal or better quality; tool-only timing cannot establish that
+target. Record first-candidate time, repair rounds and delivery time separately.
+Run code tests when changing scripts,
 not for every PDF translation.

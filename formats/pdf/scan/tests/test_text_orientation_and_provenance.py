@@ -64,6 +64,28 @@ def manifest(rotation: int = 90, block_rotation: int | None = 90) -> dict:
 
 
 class TextOrientationAndProvenanceTests(unittest.TestCase):
+    def test_small_font_is_warning_but_actual_unreadability_blocks(self):
+        import verify_scan
+        data = manifest()
+        visual = {"all_pages_rendered": True, "reviewed_changed_regions": True,
+                  "untranslated_clear_labels": 0}
+        kwargs = dict(
+            manifest=data, extracted_by_page={1: "视图A"},
+            build_report={"builder": verify_scan.OFFICIAL_BUILDER,
+                          "source_sha256": data["source_sha256"],
+                          "manifest_sha256": verify_scan.canonical_manifest_sha256(data),
+                          "output_sha256": "b" * 64,
+                          "rendered_blocks": [{"id": "p01-label", "font_size": 6.5, "complete": True}],
+                          "outside_approved_pixel_changes": 0},
+            output_page_count=1, geometry_match=True, visual_review=visual,
+            residual_cjk=[], candidate_sha256="b" * 64,
+        )
+        report = evaluate_evidence(**kwargs)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(["p01-label"], report["warnings"]["minimum_font_failures"])
+        visual["unreadable_text_failures"] = [{"page": 1, "id": "p01-label"}]
+        self.assertFalse(evaluate_evidence(**kwargs)["passed"])
+
     def test_page_detector_keeps_full_400_dpi_page_resolution(self):
         class ResizeConfig:
             limit_side_len = 736

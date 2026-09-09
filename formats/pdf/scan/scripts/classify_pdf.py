@@ -3,14 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from pypdf import PdfReader
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
+from pdf_text_visibility import native_char_count
 
 
 def classify(path: str | Path, native_char_threshold: int = 1) -> dict:
     source = Path(path).resolve()
     reader = PdfReader(str(source))
-    chars_by_page = [len("".join((page.extract_text() or "").split())) for page in reader.pages]
+    chars_by_page = [native_char_count(page) for page in reader.pages]
     native_pages = [index + 1 for index, count in enumerate(chars_by_page) if count >= native_char_threshold]
     rotated_pages = [
         index + 1

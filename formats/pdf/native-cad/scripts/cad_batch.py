@@ -11,7 +11,7 @@ from pathlib import Path
 import pymupdf
 
 # Bump when review rendering or interpretation changes; OCR has its own version.
-REVIEW_CACHE_VERSION = 2
+REVIEW_CACHE_VERSION = 3
 
 
 def save_json(path, value):
@@ -63,6 +63,27 @@ def cell_proposals(page, records):
             'layout_box': list(cell + (inset,inset,-inset,-inset)),
             'members': members, 'source_overflows_cell': not cell.contains(rect)}
         inner = cell + (inset,inset,-inset,-inset)
+        if len(members) > 1:
+            # Separate fields share a cell, not a text origin. Reserve neighbours'
+            # source extents; overlapping OCR fragments need contextual review.
+            layout = pymupdf.Rect(inner)
+            for other in records:
+                if other['id'] not in members or other['id'] == record['id']:
+                    continue
+                neighbour = pymupdf.Rect(other['bbox'])
+                if rect.intersects(neighbour):
+                    layout = rect & inner
+                    break
+                if neighbour.y1 <= rect.y0:
+                    layout.y0 = max(layout.y0, (neighbour.y1 + rect.y0) / 2)
+                elif neighbour.y0 >= rect.y1:
+                    layout.y1 = min(layout.y1, (neighbour.y0 + rect.y1) / 2)
+                elif neighbour.x1 <= rect.x0:
+                    layout.x0 = max(layout.x0, (neighbour.x1 + rect.x0) / 2)
+                elif neighbour.x0 >= rect.x1:
+                    layout.x1 = min(layout.x1, (neighbour.x0 + rect.x1) / 2)
+            if not layout.is_empty:
+                result[record['id']]['layout_box'] = list(layout)
         if len(members) == 1 and inner.contains(rect):
             result[record['id']]['cover_boxes'] = [list(inner)]
     return result
@@ -142,13 +163,16 @@ def review_bundle(source, destination, records, candidate=None, candidate_hash=N
         try:
             engine = None
             for page_index, page in enumerate(original):
+                # Parse each vector-heavy CAD page once, then render all crops.
+                source_display = page.get_displaylist()
+                target_display = translated[page_index].get_displaylist() if translated else None
                 source_png = destination/f'source-{page_index+1}.png'
-                page.get_pixmap(matrix=pymupdf.Matrix(1,1),alpha=False).save(source_png)
+                source_display.get_pixmap(matrix=pymupdf.Matrix(1,1),alpha=False).save(source_png)
                 body.append(f'<h2>Page {page_index+1}</h2><a href="{source_png.name}"><img src="{source_png.name}"></a>')
                 report['pages'].append(page_index)
                 if translated:
                     target_png = destination/f'candidate-{page_index+1}.png'
-                    translated[page_index].get_pixmap(matrix=pymupdf.Matrix(1,1),alpha=False).save(target_png)
+                    target_display.get_pixmap(matrix=pymupdf.Matrix(1,1),alpha=False).save(target_png)
                     body.append(f'<a href="{target_png.name}"><img src="{target_png.name}"></a>')
                     if residual_script:
                         if engine is None:
@@ -171,11 +195,11 @@ def review_bundle(source, destination, records, candidate=None, candidate_hash=N
                     if rect.is_empty:
                         continue
                     name=f'region-{number}'
-                    page.get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-source.png'))
+                    source_display.get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-source.png'))
                     body.append('<section><b>'+html.escape(str(record['id']))+'</b><br><code>'+html.escape(record.get('source',''))+' → '+html.escape(record.get('translation',''))+'</code><br>')
                     body.append(f'<img loading="lazy" src="{name}-source.png">')
                     if translated:
-                        translated[page_index].get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-candidate.png'))
+                        target_display.get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-candidate.png'))
                         body.append(f'<img loading="lazy" src="{name}-candidate.png">')
                     body.append('</section>')
                     report['regions'].append(record['id'])

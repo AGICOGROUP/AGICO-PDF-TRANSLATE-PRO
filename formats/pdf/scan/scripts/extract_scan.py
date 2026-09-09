@@ -186,6 +186,7 @@ def extract_selected_pages(
     run_ocr: bool = True,
     expected_sha256: str | None = None,
     resume: bool = True,
+    ocr_scales: tuple[float, ...] = (1.0,),
 ) -> dict:
     started = time.perf_counter()
     source_path = Path(source).resolve()
@@ -219,7 +220,7 @@ def extract_selected_pages(
         page_started = time.perf_counter()
         key = {"source": actual_hash, "page": page_number, "dpi": dpi,
                "implementation": implementation, "ocr_version": ocr_version,
-               "scales": [1.0, 3.0], "run_ocr": run_ocr}
+               "scales": list(ocr_scales), "run_ocr": run_ocr}
         checkpoint = cache_path / f"page-{page_number:04d}.json"
         cached = None
         if resume and checkpoint.exists():
@@ -276,7 +277,7 @@ def extract_selected_pages(
                 configure_page_detector(engine)
             with Image.open(page_record["render_path"]) as loaded:
                 image = loaded.convert("RGB")
-            raw = _ocr_pass(engine, image, 1.0) + _ocr_pass(engine, image, 3.0)
+            raw = [record for scale in ocr_scales for record in _ocr_pass(engine, image, scale)]
             merged = merge_ocr_records(raw)
             for index, record in enumerate(merged, 1):
                 lines.append(
@@ -317,6 +318,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--dpi", type=int, default=400)
     parser.add_argument("--no-resume", action="store_true", help="Ignore page checkpoints")
+    parser.add_argument("--dual-scale", action="store_true", help="Retry selected uncertain pages at 1x and 3x")
     args = parser.parse_args()
     reader = PdfReader(str(Path(args.source).resolve()))
     pages = (
@@ -324,7 +326,8 @@ def main() -> None:
         if args.pages.strip().lower() == "all"
         else [int(value) for value in args.pages.split(",") if value.strip()]
     )
-    report = extract_selected_pages(args.source, pages, args.output, dpi=args.dpi, resume=not args.no_resume)
+    report = extract_selected_pages(args.source, pages, args.output, dpi=args.dpi, resume=not args.no_resume,
+                                    ocr_scales=(1.0, 3.0) if args.dual_scale else (1.0,))
     print(
         json.dumps(
             {

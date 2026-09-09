@@ -257,8 +257,18 @@ def restore_anchored_lines(
 
 def clean_region(image: np.ndarray, region: dict) -> int:
     x0, y0, x1, y1 = region.get("clean_box", region["box"])
+    if not (0 <= x0 < x1 <= image.shape[1] and 0 <= y0 < y1 <= image.shape[0]):
+        raise ValueError('cleanup box lies outside source image')
     source_crop = image[y0:y1, x0:x1].copy()
     mode = region["mode"]
+    if mode in {'solid_fill', 'text_only_area', 'cyan_glyph', 'white_text_area'}:
+        # A long rule is positive evidence that this is NOT text-only fill.
+        # This cheap check catches broad page/border wipes; it is not a complete
+        # structure detector. Declared protected boxes and visual review remain.
+        dark = source_crop.max(axis=2) < 185
+        if (np.any(dark.sum(axis=0) >= max(64, dark.shape[0] * .8))
+                or np.any(dark.sum(axis=1) >= max(64, dark.shape[1] * .8))):
+            raise ValueError('text-only cleanup intersects probable structure; use tight glyph boxes')
     source_for_restore = image.copy() if mode == "anchored_line_restore" else None
     if mode == "neutral_plain":
         mask = neutral_mask(source_crop, "none")
@@ -310,7 +320,19 @@ def build(metadata_path: Path) -> dict:
         output_path = resolve(base, item["output"])
         source = np.array(Image.open(source_path).convert("RGB"))
         cleaned = source.copy()
+        allowed = np.zeros(source.shape[:2], dtype=bool)
+        protected = np.zeros_like(allowed)
+        for box in item.get('protected_boxes', []):
+            x0, y0, x1, y1 = box
+            if not (0 <= x0 < x1 <= source.shape[1] and 0 <= y0 < y1 <= source.shape[0]):
+                raise ValueError('protected box lies outside source image')
+            protected[y0:y1, x0:x1] = True
+        for region in item['regions']:
+            x0, y0, x1, y1 = region.get('clean_box', region['box'])
+            allowed[y0:y1, x0:x1] = True
         changed_by_region = [clean_region(cleaned, region) for region in item["regions"]]
+        cleaned[protected] = source[protected]
+        changed = np.any(source != cleaned, axis=2)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(cleaned, "RGB").save(output_path, format="PNG")
         report["images"].append(
@@ -320,6 +342,9 @@ def build(metadata_path: Path) -> dict:
                 "output": str(output_path),
                 "size": [source.shape[1], source.shape[0]],
                 "changed_pixels": int(np.any(source != cleaned, axis=2).sum()),
+                "outside_region_pixel_changes": int((changed & ~allowed).sum()),
+                "protected_pixel_changes": int((changed & protected).sum()),
+                "protected_pixel_count": int(protected.sum()),
                 "changed_by_region": changed_by_region,
                 "restored_line_segments": sum(
                     int(region.get("_restored_segments", 0))

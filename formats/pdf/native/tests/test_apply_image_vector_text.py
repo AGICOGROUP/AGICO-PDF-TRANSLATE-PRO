@@ -20,6 +20,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EmptyImageTextTests(unittest.TestCase):
+    def test_default_fonts_include_chinese_glyphs(self):
+        MODULE.register_fonts(MODULE.default_font(False), MODULE.default_font(True))
+        regular = MODULE.pdfmetrics.getFont(MODULE.FONT_REGULAR)
+        bold = MODULE.pdfmetrics.getFont(MODULE.FONT_BOLD)
+        self.assertNotEqual(0, regular.face.charToGlyph.get(ord("中"), 0))
+        self.assertNotEqual(0, bold.face.charToGlyph.get(ord("中"), 0))
+
     def test_empty_text_cleans_raster_without_drawing_duplicate_label(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
