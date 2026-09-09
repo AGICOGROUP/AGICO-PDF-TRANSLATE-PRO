@@ -798,7 +798,7 @@ class ProtectedNativeTextTests(unittest.TestCase):
         )
         self.assertGreater(font.size, 0)
 
-    def test_same_body_role_uses_one_page_level_font_size(self):
+    def test_same_body_role_keeps_base_except_overflowing_paragraph(self):
         harmonize = require(rebuild, "harmonize_flow_font_sizes")
         image = Image.new("RGB", (8, 8), "white")
         draw = ImageDraw.Draw(image)
@@ -820,7 +820,10 @@ class ProtectedNativeTextTests(unittest.TestCase):
             },
         ]
         harmonize(flows, pipeline, draw)
-        self.assertEqual(flows[0]["target_font_size"], flows[1]["target_font_size"])
+        self.assertEqual(flows[0]["base_font_size"], flows[1]["base_font_size"])
+        self.assertEqual(flows[0]["target_font_size"], flows[0]["base_font_size"])
+        self.assertGreater(flows[0]["target_font_size"], flows[1]["target_font_size"])
+        self.assertEqual(flows[1]["font_size_exception"]["reason"], "paragraph_overflow")
         self.assertGreaterEqual(flows[0]["target_font_size"], 11.5)
 
     def test_harmonization_defers_an_unfittable_flow_to_the_readable_fit_stage(self):

@@ -883,6 +883,7 @@ def harmonize_flow_font_sizes(
             flow["fixed_body_font_size"] = True
         return
     fitted_by_role: dict[str, list[float]] = {}
+    fitted_by_flow: list[float] = []
     for flow in flows:
         style = flow["style"]
         source_size = float(style.get("role_size", style.get("size", 9)))
@@ -898,6 +899,7 @@ def harmonize_flow_font_sizes(
             fitted_size = float(font.size) / LAYOUT_SCALE
         except ValueError:
             fitted_size = minimum_body_font_size(style)
+        fitted_by_flow.append(fitted_size)
         fitted_by_role.setdefault(typography_group(str(flow.get("role", "body"))), []).append(
             fitted_size
         )
@@ -919,10 +921,13 @@ def harmonize_flow_font_sizes(
         source_median = middle(source_by_role[role])
         target_by_role[role] = max(
             minimum_body_font_size({"size": source_median}),
-            min(min(sizes), source_median),
+            source_median,
         )
-    for flow in flows:
-        target = target_by_role[typography_group(str(flow.get("role", "body")))]
+    for flow, fitted_size in zip(flows, fitted_by_flow):
+        base = target_by_role[typography_group(str(flow.get("role", "body")))]
+        target = max(minimum_body_font_size(flow["style"]), min(base, fitted_size))
+        flow["base_font_size"] = base
+        flow["font_size_exception"] = {"reason": "paragraph_overflow", "base_font_size": base, "font_size": target} if target < base else None
         flow["target_font_size"] = target
         flow["style"]["role_size"] = target
 
@@ -1413,6 +1418,8 @@ def draw_flow_text(
     return {
         "font_size": font_size,
         "source_font_size": source_size,
+        "base_font_size": flow.get("base_font_size", source_size),
+        "font_size_exception": ({"reason": "paragraph_overflow", "base_font_size": flow.get("base_font_size", source_size), "font_size": font_size} if font_size < flow.get("base_font_size", source_size) else None),
         "font_name": font_name,
         "bold": bool(style.get("bold")),
         "fallback_shrink": fallback,

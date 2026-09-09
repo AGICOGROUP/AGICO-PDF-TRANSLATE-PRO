@@ -150,11 +150,14 @@ one-to-one source-label translations with a summary panel.
   body text uses regular weight and the page's dominant readable size;
   annotations use regular weight and a smaller size. Keep the ordering
   `title > body > annotation` whenever all three occur on the page.
-- Fit and reduce each group independently. If one body block cannot fit, reduce
-  every body block on that page to the same fitting size, but never let a small
-  annotation, caption, drawing label, header, footer, or table cell reduce the
-  body size. Likewise, a dense body paragraph must not reduce title or
-  annotation sizes.
+- Use one baseline size per page typography group. Fit complete paragraphs at
+  that baseline with wrapping first. If a paragraph still overflows, reduce
+  only that entire paragraph to a single fitting size and record its baseline,
+  fitted size and overflow reason. Keep all other paragraphs at the baseline.
+  Never shrink individual OCR words or lines independently. A small annotation,
+  caption, header, footer or table cell must not reduce body text size.
+  Review exceptions for readability and `title > body > annotation`; if this
+  hierarchy cannot be retained, adjust layout rather than silently accepting it.
 - Preserve image placement first. Only after a recorded text-fit failure may a
   text-free large image shift or shrink proportionally into verified whitespace.
   A shift reuses exact pixels; a shrink may only resample the original crop

@@ -346,3 +346,14 @@ Also require:
 - Report exact technical limits instead of lowering acceptance criteria.
 - Never claim selectable or pixel-preserving output without automated evidence
   and final visual review.
+
+## Paragraph overflow exception
+
+Use one baseline font size per page text category (title, body, annotation).
+Preserve title > body > annotation. Wrap complete paragraphs at that baseline
+first. Only a paragraph that cannot fit may shrink as a whole, with one size
+throughout the paragraph; other paragraphs retain the baseline. Record the
+baseline, fitted size and overflow reason. Do not independently shrink OCR
+words or lines. Review readability and hierarchy after fitting; resolve any
+conflict through layout correction. Images count as one page and inherit this
+policy through the shared scan builder.

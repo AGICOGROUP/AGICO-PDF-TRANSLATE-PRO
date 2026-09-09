@@ -51,9 +51,11 @@ has been reviewed. An empty list is valid when there were no anomalies.
    approved regions and exact-source provenance for restored icons/crops.
 6. Layout safety: automatic and exception review reports zero overlap,
    clipping, below-minimum text, or protected-structure coverage. Page-level
-   typography evidence must show one common fitted size for every title group,
+   typography evidence must show one common baseline size for every title group,
    one for body, and one for annotation. Tables, headers, and footers use
-   independent groups. When present together, title is larger than body and body
+   independent groups. Only a complete overflowing paragraph may shrink below
+   its baseline; record the paragraph, original size, fitted size and reason.
+   Other paragraphs must retain the baseline. When present together, title is larger than body and body
    is larger than annotation. Annotation fitting must not reduce body size.
 7. Final render: render the completed PDF once, automatically check all pages,
    and manually inspect only changed regions and anomaly pages.

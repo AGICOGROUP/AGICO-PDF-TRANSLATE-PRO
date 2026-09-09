@@ -389,15 +389,14 @@ def resolve_page_typography(blocks: list[dict], page: dict) -> dict[str, dict]:
                     raise TextOverflowError(f"block {block.get('id', '')} complete text does not fit: {exc}") from exc
             fitted_sizes.append(float(fitted_size))
         requested_size = float(evidence[group]["font_size"])
-        common_size = min(fitted_sizes)
-        for block in members:
-            block["max_font"] = common_size
-            block["min_font"] = common_size
+        for block, fitted_size in zip(members, fitted_sizes):
+            block["max_font"] = fitted_size
+            block["min_font"] = fitted_size
             block["leading_ratio"] = float(block.get("leading_ratio", 1.16))
-        evidence[group]["font_size"] = common_size
+        evidence[group]["font_size"] = requested_size
         evidence[group]["requested_font_size"] = requested_size
         evidence[group]["fit_constraints"] = [
-            {"block_id": block.get("id", ""), "maximum_fitting_size": fitted_size}
+            {"block_id": block.get("id", ""), "maximum_fitting_size": fitted_size, "reason": "paragraph_overflow", "base_font_size": requested_size}
             for block, fitted_size in zip(members, fitted_sizes)
             if fitted_size < requested_size
         ]
