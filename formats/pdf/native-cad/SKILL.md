@@ -139,6 +139,13 @@ python scripts/native_cad_pipeline.py verify <job> --candidate <job>/translated-
 ```
 
 Deliver only after final QA passes and source-to-target findings are resolved.
+When a label cannot fit, apply retains that label's source and saves
+translated-native-cad-preview.pdf with failed IDs in apply-report.json, returning
+a nonzero exit code. Inspect it before sharing; a useful partial translation may
+be delivered as a clearly labelled preview with those defects, never as passed.
+The report's preview path identifies the current result; an older normal output
+may still exist and is not the new candidate. Do not present an almost entirely
+untranslated drawing as a useful translation. Keep normal verification unchanged.
 Report full elapsed time separately from OCR/apply/review seconds. Cached
 replays are not fresh translation timings. The target is a 50% reduction in full
 elapsed time with equal or better quality; tool-only timing cannot establish that

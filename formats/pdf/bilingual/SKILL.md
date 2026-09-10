@@ -185,21 +185,30 @@ images, or on vector graphics lines.
 
 ## Acceptance gates
 
-Deliver only when every gate passes:
+Apply the shared delivery policy: correct content, complete/readable output,
+and intact key structure are blocking requirements for completed delivery.
+Use these checks as evidence:
 
 1. Source text remains visible and unchanged; originally selectable text stays selectable.
 2. Every visible source-language block has the requested target-language translation placed in
    nearby whitespace.
-3. No translation overlaps source text, table borders, images, or vector
-   graphics.
-4. Page count, page size, rotation, and all non-text pixels match the source.
+3. No actual text obstruction or damage to table borders, images, or drawing
+   connections. Harmless bounding-box contact is a diagnostic, not a failure.
+4. Preserve page count, page size, rotation, and original non-text artwork.
+   Added translations necessarily change pixels in approved whitespace.
 5. Translations use an embedded font supporting the target language — no missing-glyph boxes.
-6. Font sizes are consistent within each role group on each page.
+6. Minor font-size, weight and alignment differences are warnings when readable.
 7. Numbers, units, standards, and model codes are preserved untranslated.
 8. The build report identifies `translate-pdf-bilingual-overlay`, binds source,
    translation packet, and output hashes, and changed-region review passes.
 
 ## Failure policy
+
+Do not rebuild for cosmetic warnings alone. If completed delivery remains
+blocked at the shared time limit, deliver an existing useful candidate as a
+clearly labelled preview with located defects and unverified items. A largely
+untranslated or unreadable file is not a useful translation preview. Keep
+failed/unverified status; do not claim that a preview passed acceptance.
 
 - If a translation does not fit in available whitespace, reduce font size
   (floor: 5pt) or shorten the translation wording before relocating.

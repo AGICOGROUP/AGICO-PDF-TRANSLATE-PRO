@@ -13,6 +13,12 @@ Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
 reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,
 clipping_failures, unreadable_text_failures and untranslated_clear_labels.
 Only record observed findings; a missing check is not a zero result.
+Automatic overlap candidates may be dismissed only after local visual inspection:
+copy the exact output_page, first, second, first_box and second_box into
+reviewed_overlap_false_positives with a nonempty reason. The existing candidate
+hash must match. No whole-page exclusions; actual overlaps recorded in
+text_overlap_failures remain blocking. Old reviewed OCR false positives absent
+from the current result are warnings, not new translation defects.
 Render initial page coverage, then only affected pages after corrections;
 reuse unchanged-page evidence with content identity.
 

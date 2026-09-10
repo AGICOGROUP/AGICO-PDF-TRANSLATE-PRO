@@ -9,8 +9,11 @@ Retain tags, numbers, borders, pipes and symbols. Replace a tight bilingual
 description once; never estimate a script boundary from character counts.
 A genuine separated existing target may use cover_only with target_present.
 
-Verify checks page count/size/rotation, painted image digests/transforms and
-retained vector count. Unused image resources and duplicate resource references
+Verify checks page count/size/rotation and painted image digests/transforms.
+A reduced vector-object count is diagnostic only: merging paths may change
+counts without changing the drawing; adding objects cannot prove preservation.
+Actual line/graphic damage remains a visual-review blocker.
+Unused image resources and duplicate resource references
 may disappear on save without losing visible images; dummy objects are never a
 valid repair. These checks do not prove graphical integrity: inspect each
 replacement with source pixels.

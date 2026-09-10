@@ -104,6 +104,61 @@ class NativeCadPipelineTests(unittest.TestCase):
             self.assertEqual(["p0001-s00001"], report["incomplete_records"])
             self.assertFalse((job / "translated-native-cad.pdf").exists())
 
+    def test_fit_failure_saves_preview_with_original_failed_label(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'source.pdf'
+            pdf = canvas.Canvas(str(source), pagesize=(842, 595))
+            pdf.drawString(90, 330, 'NORMAL LABEL')
+            pdf.drawString(90, 280, 'FAILED LABEL')
+            # Small vector strokes stand in for a font-outline label.
+            pdf.line(100, 190, 105, 180)
+            pdf.line(105, 180, 110, 190)
+            pdf.line(80, 200, 760, 200)
+            pdf.save()
+            job = root / 'job'
+            self.prepare(source, job)
+            packet_path = job / 'translation-packet.json'
+            packet = json.loads(packet_path.read_text(encoding='utf-8'))
+            inventory_path = job / 'source-inventory.json'
+            inventory = json.loads(inventory_path.read_text(encoding='utf-8'))
+            outline = {'id': 'p0001-o-test', 'page': 0, 'kind': 'outline',
+                       'source': 'OUTLINED LABEL', 'bbox': [98, 403, 112, 417],
+                       'font_size': 12, 'rotation': 0, 'color': 0, 'status': 'pending'}
+            inventory['records'].append(outline)
+            inventory_path.write_text(json.dumps(inventory), encoding='utf-8')
+            packet['records'].append({**outline, 'role': 'body',
+                                      'cover_review': {'approved': True, 'text_only': True,
+                                                       'white_background': True, 'source_text_paths': True,
+                                                       'note': 'Known small outline-stroke fixture.'}})
+            for record in packet['records']:
+                record.update(status='translated', translation='Translated')
+                if record['source'] == 'FAILED LABEL':
+                    record['translation'] = 'too long ' * 2000
+                    failed_id = record['id']
+                if record['source'] == 'OUTLINED LABEL':
+                    record['translation'] = 'too long ' * 2000
+            packet_path.write_text(json.dumps(packet), encoding='utf-8')
+            result = self.run_pipeline('apply', job, '--packet', packet_path, '--font-file', FONT)
+            self.assertNotEqual(0, result.returncode)
+            report = json.loads((job / 'apply-report.json').read_text(encoding='utf-8'))
+            self.assertFalse(report['passed'])
+            self.assertEqual([failed_id, 'p0001-o-test'], report['source_retained_ids'])
+            preview = Path(report['preview'])
+            with pymupdf.open(preview) as doc, pymupdf.open(source) as original:
+                self.assertIn('Translated', doc[0].get_text())
+                self.assertIn('FAILED LABEL', doc[0].get_text())
+                self.assertNotIn('NORMAL LABEL', doc[0].get_text())
+                self.assertEqual(len(original[0].get_drawings()), len(doc[0].get_drawings()))
+                for record in inventory['records']:
+                    if record['id'] in report['source_retained_ids']:
+                        clip = pymupdf.Rect(record['bbox'])
+                        self.assertEqual(original[0].get_pixmap(clip=clip).samples,
+                                         doc[0].get_pixmap(clip=clip).samples)
+            verified = self.run_pipeline('verify', job, '--candidate', preview)
+            self.assertNotEqual(0, verified.returncode)
+            self.assertFalse(json.loads((job / 'final-qa.json').read_text())['passed'])
+
     def test_apply_replaces_text_without_removing_vectors(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -190,6 +245,12 @@ class NativeCadPipelineTests(unittest.TestCase):
             repeated = self.run_pipeline('verify', job, '--candidate', candidate, '--visual-review', review)
             self.assertEqual(0, repeated.returncode, repeated.stderr)
             self.assertEqual(rendered_at, preview.stat().st_mtime_ns)
+            visual = json.loads(review.read_text(encoding='utf-8'))
+            visual['line_or_graphic_damage'] = [{'page': 1, 'reason': 'Broken process connection'}]
+            review.write_text(json.dumps(visual), encoding='utf-8')
+            damaged = self.run_pipeline('verify', job, '--candidate', candidate, '--visual-review', review)
+            self.assertNotEqual(0, damaged.returncode)
+            self.assertIn('line_or_graphic_damage', json.loads((job / 'final-qa.json').read_text())['failures'])
 
     def test_form_xobject_text_is_inventoried_and_replaced(self):
         with tempfile.TemporaryDirectory() as directory:

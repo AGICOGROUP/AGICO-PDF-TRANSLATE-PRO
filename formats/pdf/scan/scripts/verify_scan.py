@@ -145,6 +145,18 @@ def _translation_present(block: dict, extracted: str) -> bool:
     return bool(expected) and expected in normalized_output
 
 
+def filter_reviewed_overlap_false_positives(candidates, reviewed):
+    """Only dismiss an exact, locally reviewed word pair, never a page/region."""
+    keys = ('output_page', 'first', 'second', 'first_box', 'second_box')
+    remaining, dismissed = [], []
+    for candidate in candidates:
+        match = next((item for item in reviewed
+                      if str(item.get('reason', '')).strip()
+                      and all(key in candidate and item.get(key) == candidate[key] for key in keys)), None)
+        (dismissed if match else remaining).append(candidate)
+    return remaining, dismissed
+
+
 def evaluate_evidence(
     manifest: dict,
     extracted_by_page: dict[int, str],
@@ -235,7 +247,11 @@ def evaluate_evidence(
     ]
 
     overlap_failures = list(visual_review.get("text_overlap_failures", []))
-    overlap_failures.extend(automated_overlap_failures or [])
+    reviewed_overlaps = (visual_review.get('reviewed_overlap_false_positives', [])
+                         if candidate_sha256 and visual_review.get('candidate_sha256') == candidate_sha256 else [])
+    remaining_overlaps, dismissed_overlaps = filter_reviewed_overlap_false_positives(
+        automated_overlap_failures or [], reviewed_overlaps)
+    overlap_failures.extend(remaining_overlaps)
     clipping_failures = list(visual_review.get("clipping_failures", []))
     embedding_failures = font_embedding_failures or []
     assigned_ids = {
@@ -297,6 +313,8 @@ def evaluate_evidence(
         "official_pipeline": official_pipeline,
     }
     report["warnings"] = {"minimum_font_failures": minimum_font_failures} if minimum_font_failures else {}
+    if dismissed_overlaps:
+        report['warnings']['reviewed_overlap_false_positives'] = dismissed_overlaps
     report["unreadable_text_failures"] = visual_review.get("unreadable_text_failures", [])
     report["passed"] = all(
         [
@@ -382,6 +400,8 @@ def extract_output_text(
                                 "output_page": index + 1,
                                 "first": first["text"],
                                 "second": second["text"],
+                                "first_box": [first[k] for k in ('x0', 'top', 'x1', 'bottom')],
+                                "second_box": [second[k] for k in ('x0', 'top', 'x1', 'bottom')],
                             }
                         )
     return extracted_by_page, overlap_failures
@@ -554,7 +574,9 @@ def main() -> None:
         }
     )
     report["translation_review_errors"] = semantic_errors
-    report["passed"] = report["passed"] and not report["unmatched_reviewed_ocr_false_positives"] and not semantic_errors
+    if report['unmatched_reviewed_ocr_false_positives']:
+        report['warnings']['unmatched_reviewed_ocr_false_positives'] = report['unmatched_reviewed_ocr_false_positives']
+    report["passed"] = report["passed"] and not semantic_errors
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

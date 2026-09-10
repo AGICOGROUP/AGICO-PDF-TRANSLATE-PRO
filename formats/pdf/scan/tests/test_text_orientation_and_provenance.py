@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 import unittest
+import tempfile
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
@@ -64,6 +66,76 @@ def manifest(rotation: int = 90, block_rotation: int | None = 90) -> dict:
 
 
 class TextOrientationAndProvenanceTests(unittest.TestCase):
+    def test_stale_ocr_review_warns_but_current_residue_still_fails(self):
+        import verify_scan
+        from pypdf import PdfWriter
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / 'source.pdf'
+            writer = PdfWriter()
+            writer.add_blank_page(width=600, height=800)
+            writer.write(pdf)
+            digest = verify_scan.sha256_file(pdf)
+            data = manifest()
+            data['source_sha256'] = digest
+            review = {'candidate_sha256': digest, 'all_pages_rendered': True,
+                      'reviewed_changed_regions': True, 'untranslated_clear_labels': 0,
+                      'reviewed_ocr_false_positives': [{'output_page': 1, 'box': [0, 0, 10, 10]}]}
+            build = {'builder': verify_scan.OFFICIAL_BUILDER, 'source_sha256': digest,
+                     'output_sha256': digest, 'manifest_sha256': verify_scan.canonical_manifest_sha256(data),
+                     'rendered_blocks': [{'id': 'p01-label', 'font_size': 9, 'complete': True}],
+                     'outside_approved_pixel_changes': 0}
+            semantic = {'source_sha256': digest, 'candidate_sha256': digest, 'adapter': 'scan',
+                        'selected_source_pages': [1], 'pages': [{'source_page': 1, 'status': 'passed',
+                        'reviewed_source_ids': ['p01-l001'], 'context_checked': 'Fixture label.',
+                        'corrections': [], 'unresolved_issues': []}]}
+            for name, value in [('manifest.json', data), ('visual.json', review),
+                                ('build.json', build), ('translation-review.json', semantic)]:
+                (root / name).write_text(json.dumps(value), encoding='utf-8')
+            argv = ['verify', '--source', str(pdf), '--pdf', str(pdf),
+                    '--manifest', str(root / 'manifest.json'), '--visual-review', str(root / 'visual.json'),
+                    '--build-report', str(root / 'build.json'), '--report', str(root / 'qa.json')]
+            with patch.object(sys, 'argv', argv), patch.object(verify_scan, 'extract_output_text', return_value=({1: '视图A'}, [])):
+                verify_scan.main()
+                qa = json.loads((root / 'qa.json').read_text(encoding='utf-8'))
+                self.assertTrue(qa['passed'])
+                self.assertTrue(qa['warnings']['unmatched_reviewed_ocr_false_positives'])
+                with patch.object(verify_scan, 'filter_approved_bilingual_residuals',
+                                  return_value=[{'output_page': 1, 'box': [50, 50, 60, 60]}]):
+                    with self.assertRaises(SystemExit):
+                        verify_scan.main()
+                self.assertFalse(json.loads((root / 'qa.json').read_text(encoding='utf-8'))['passed'])
+
+    def test_review_only_dismisses_exact_overlap_on_current_candidate(self):
+        import verify_scan
+        data = manifest()
+        candidate = {'output_page': 1, 'first': 'ABC', 'second': 'DEF',
+                     'first_box': [0, 0, 10, 10], 'second_box': [9, 0, 19, 10]}
+        visual = {'all_pages_rendered': True, 'reviewed_changed_regions': True,
+                  'untranslated_clear_labels': 0, 'candidate_sha256': 'b' * 64,
+                  'reviewed_overlap_false_positives': [{**candidate, 'reason': 'Inspected crop: glyphs do not touch.'}]}
+        kwargs = dict(manifest=data, extracted_by_page={1: '视图A'},
+                      build_report={'builder': verify_scan.OFFICIAL_BUILDER,
+                                    'source_sha256': data['source_sha256'],
+                                    'manifest_sha256': verify_scan.canonical_manifest_sha256(data),
+                                    'output_sha256': 'b' * 64,
+                                    'rendered_blocks': [{'id': 'p01-label', 'font_size': 9, 'complete': True}],
+                                    'outside_approved_pixel_changes': 0},
+                      output_page_count=1, geometry_match=True, visual_review=visual,
+                      residual_cjk=[], candidate_sha256='b' * 64,
+                      automated_overlap_failures=[candidate])
+        self.assertTrue(evaluate_evidence(**kwargs)['passed'])
+        visual['text_overlap_failures'] = [candidate]
+        self.assertFalse(evaluate_evidence(**kwargs)['passed'])
+        visual['text_overlap_failures'] = []
+        visual['candidate_sha256'] = 'c' * 64
+        self.assertFalse(evaluate_evidence(**kwargs)['passed'])
+        visual['candidate_sha256'] = 'b' * 64
+        visual['reviewed_overlap_false_positives'][0]['first_box'] = [0, 20, 10, 30]
+        self.assertFalse(evaluate_evidence(**kwargs)['passed'])
+        visual['reviewed_overlap_false_positives'] = [{**candidate, 'reason': ''}]
+        self.assertFalse(evaluate_evidence(**kwargs)['passed'])
+
     def test_small_font_is_warning_but_actual_unreadability_blocks(self):
         import verify_scan
         data = manifest()

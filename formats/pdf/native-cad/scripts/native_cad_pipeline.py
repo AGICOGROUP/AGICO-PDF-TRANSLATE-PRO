@@ -267,6 +267,7 @@ def insert_fitted_text(
     color: tuple[float, float, float],
     rotation: int,
     font_file: Path,
+    *, commit: bool = True,
 ) -> float | None:
     def probe(size):
         shape = page.new_shape()
@@ -283,8 +284,9 @@ def insert_fitted_text(
     high, low = max(source_size, 4.0), 4.0
     shape = probe(high)
     if shape is not None:
-        shape.commit(overlay=True)
-        return round(high, 3)
+        if commit:
+            shape.commit(overlay=True)
+        return high
     best = probe(low)
     if best is None:
         return None
@@ -296,8 +298,9 @@ def insert_fitted_text(
             high = size
         else:
             low, best = size, shape
-    best.commit(overlay=True)
-    return round(low, 3)
+    if commit:
+        best.commit(overlay=True)
+    return low
 
 
 def typography_baselines(records, supplied):
@@ -456,8 +459,25 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         document.close()
         write_json(report_path, {'passed': False, 'failures': ['unsafe_outline_regions'], 'regions': unsafe, 'fit_failures': []})
         return 2
+    # Fit before erasing source labels. Failed labels stay intact in a preview.
+    translated_records = [r for r in covered if supplied[str(r['id'])].get('status') == 'translated']
+    baselines = typography_baselines(translated_records, supplied)
+    fitted_sizes = {}
+    for record in translated_records:
+        translated = supplied[str(record['id'])]
+        fitted_sizes[record['id']] = insert_fitted_text(
+            document[int(record['page'])],
+            pymupdf.Rect(translated.get('layout_box', record['bbox'])),
+            str(translated['translation']).strip(),
+            baselines[(int(record['page']), translated.get('role', 'body'))],
+            rgb_from_int(int(record['color'])),
+            int(translated.get('rotation', record['rotation']) if record.get('kind') == 'outline' else record['rotation']),
+            font_file, commit=False,
+        )
+    fit_failures = [key for key, size in fitted_sizes.items() if size is None]
     for page_index, records in by_page.items():
         page = document[page_index]
+        records = [r for r in records if r['id'] not in fit_failures]
         for record in records:
             if record.get('kind') != 'outline':
                 page.add_redact_annot(pymupdf.Rect(record["bbox"]), fill=None, cross_out=False)
@@ -469,24 +489,27 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         if restore_by_page.get(page_index):
             redraw_paths(page, [drawings_by_page[page_index]['paths'][index] for index in sorted(restore_by_page[page_index])])
 
-    fit_failures: list[str] = []
     applied_records: list[dict[str, object]] = []
-    translated_records = [record for record in covered if supplied[str(record['id'])].get('status') == 'translated']
-    baselines = typography_baselines(translated_records, supplied)
     for record in translated_records:
+        if record['id'] in fit_failures:
+            continue
         translated = supplied[str(record["id"])]
         page = document[int(record["page"])]
         fitted_size = insert_fitted_text(
             page,
             pymupdf.Rect(translated.get('layout_box', record['bbox'])),
             str(translated["translation"]).strip(),
-            baselines[(int(record['page']), translated.get('role', 'body'))],
+            fitted_sizes[record['id']],
             rgb_from_int(int(record["color"])),
             int(translated.get('rotation', record['rotation']) if record.get('kind') == 'outline' else record['rotation']),
             font_file,
         )
         if fitted_size is None:
-            fit_failures.append(str(record["id"]))
+            # Never save a candidate if a previously fitting label disappeared.
+            document.close()
+            write_json(report_path, {'passed': False, 'failures': ['fit_changed_after_cleanup'],
+                                     'fit_failures': [record['id']]})
+            return 2
         else:
             baseline = baselines[(int(record['page']), translated.get('role', 'body'))]
             applied_records.append({"id": record["id"], "font_size": fitted_size, 'baseline_font_size': baseline,
@@ -494,6 +517,8 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
 
     output = job_dir / OUTPUT_NAME
     if fit_failures:
+        preview = job_dir / 'translated-native-cad-preview.pdf'
+        document.save(preview, garbage=4, deflate=True)
         document.close()
         write_json(
             report_path,
@@ -503,8 +528,15 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                 "incomplete_records": [],
                 "fit_failures": fit_failures,
                 "applied_records": applied_records,
+                "source_sha256": inventory['source_sha256'],
+                "preview": str(preview),
+                "preview_sha256": sha256(preview),
+                "source_retained_ids": fit_failures,
+                "delivery_status": "preview_requires_review",
             },
         )
+        print(json.dumps({'stage': 'preview_requires_review', 'output': str(preview),
+                          'fit_failures': fit_failures}, ensure_ascii=False))
         return 2
     document.save(output, garbage=4, deflate=True)
     document.close()
@@ -538,7 +570,8 @@ def same_page_structure(expected: dict[str, object], actual: dict[str, object]) 
     images_match = (expected['painted_images'] == actual.get('painted_images')
                     if 'painted_images' in expected
                     else expected['image_count'] == actual['image_count'])
-    return stable_fields_match and images_match and int(actual["vector_count"]) >= int(expected["vector_count"])
+    # Path counts change with harmless merging/splitting and cannot prove damage.
+    return stable_fields_match and images_match
 
 
 def write_review_template(job_dir: Path, candidate_hash: str) -> None:
@@ -568,6 +601,7 @@ def verify(
     candidate_hash = sha256(candidate)
     if not apply_report.get("passed") or apply_report.get("candidate_sha256") != candidate_hash:
         failures.append("candidate_not_bound_to_apply_report")
+    vector_count_changes = []
     try:
         source_snapshots = inventory['pages']
         if any('painted_images' not in snapshot for snapshot in source_snapshots):
@@ -576,13 +610,16 @@ def verify(
         document = pymupdf.open(candidate)
         if document.page_count != inventory.get("page_count"):
             failures.append("page_count_mismatch")
-        elif any(
-            not same_page_structure(
-                expected if 'painted_images' in expected else source_snapshots[index],
-                page_snapshot(document[index]))
-            for index, expected in enumerate(inventory["pages"])
-        ):
-            failures.append("page_structure_mismatch")
+        else:
+            for index, expected in enumerate(source_snapshots):
+                actual = page_snapshot(document[index])
+                if not same_page_structure(expected, actual):
+                    if "page_structure_mismatch" not in failures:
+                        failures.append("page_structure_mismatch")
+                if int(actual['vector_count']) < int(expected['vector_count']):
+                    vector_count_changes.append({'page': index + 1,
+                                                 'source': expected['vector_count'],
+                                                 'candidate': actual['vector_count']})
         preview_dir = job_dir / "review"
         preview_dir.mkdir(exist_ok=True)
         render_binding = preview_dir / 'render-binding.json'
@@ -621,6 +658,7 @@ def verify(
         "source_sha256": inventory.get("source_sha256"),
         "candidate_sha256": candidate_hash,
         "failures": failures,
+        "warnings": {"reduced_vector_count": vector_count_changes} if vector_count_changes else {},
     }
     write_json(job_dir / FINAL_QA_NAME, qa)
     print(json.dumps(qa, ensure_ascii=False))

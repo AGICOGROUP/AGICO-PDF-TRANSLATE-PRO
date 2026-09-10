@@ -81,6 +81,25 @@ def test_image_structure_ignores_unused_resources_but_detects_moved_image(tmp_pa
         assert not cad.same_page_structure(expected, dict(expected, painted_images=[]))
 
 
+def test_path_merging_preserves_pixels_despite_lower_vector_count():
+    import native_cad_pipeline as cad
+    with pymupdf.open() as source, pymupdf.open() as candidate:
+        original = source.new_page(width=200, height=100)
+        target = candidate.new_page(width=200, height=100)
+        original.draw_line((10, 20), (100, 20))
+        original.draw_line((10, 40), (100, 40))
+        shape = target.new_shape()
+        shape.draw_line((10, 20), (100, 20))
+        shape.draw_line((10, 40), (100, 40))
+        shape.finish(color=(0, 0, 0))
+        shape.commit()
+        expected, actual = cad.page_snapshot(original), cad.page_snapshot(target)
+        assert actual['vector_count'] < expected['vector_count']
+        assert original.get_pixmap().samples == target.get_pixmap().samples
+        assert cad.same_page_structure(expected, actual)
+        assert not cad.same_page_structure(expected, dict(actual, width=300))
+
+
 def test_displaylist_review_crops_match_page_render(tmp_path):
     import cad_batch
     source = tmp_path/'source.pdf'
