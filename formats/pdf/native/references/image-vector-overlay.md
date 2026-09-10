@@ -122,8 +122,12 @@ python scripts/apply_image_vector_text.py `
 ```
 
 Pass `--regular-font` and `--bold-font` for fonts covering the requested script.
-The Windows defaults prefer CJK-capable fonts. Check target glyph coverage;
-availability of a Latin font is not proof that Chinese can render.
+The writer checks actual region text against each font's glyph map and tries
+the default font when the requested font lacks characters. If neither covers
+the text, supply a covering font and rerun this overlay step; do not retranslate
+or rebuild unaffected content. Confirm the changed image labels in the existing
+local render review: extractable text or an embedded font alone does not prove
+visible Chinese glyphs, and square placeholders are not acceptable translation.
 
 ## Verification
 

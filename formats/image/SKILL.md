@@ -20,14 +20,25 @@ the scan PDF acceptance gates. This adapter owns its final checks.
 
 1. Fingerprint the immutable source image and create an isolated job directory.
 2. Run OCR and inspect the full-resolution source image. If OCR finds zero readable text and full-image visual inspection confirms there is no readable text, record `translation_complete_no_text` with the source hash, empty OCR result, and completed visual review. Mark the translation phase complete and stop. Do not create a translated image or PDF, and do not run cleanup, layout, build, or verification. OCR alone is insufficient for this decision.
-3. Otherwise, run `scripts/image_pdf_bridge.py wrap <source-image> <job/source.pdf> <job/image-metadata.json>`.
-4. Treat `job/source.pdf` as a one-page raster carrier. Reuse the scan adapter's
+3. If every readable item is language-neutral technical notation—only numbers,
+   dimension/tolerance/mathematical symbols, standard units, or unambiguous
+   drawing/model identifiers—and the full-image review confirms there is no
+   translatable natural language, record
+   `translation_complete_no_translatable_text` with the source hash, item
+   inventory, and completed visual review. Return the source image, or a
+   byte-for-byte copy when a separate output path is required, and verify that
+   its SHA-256 equals the source SHA-256. Stop before PDF wrapping, cleanup,
+   layout, build, unwrap, or re-encoding. If any word, abbreviation, qualifier,
+   note, or other item may require localization, or the classification is
+   uncertain, do not use this branch.
+4. Otherwise, run `scripts/image_pdf_bridge.py wrap <source-image> <job/source.pdf> <job/image-metadata.json>`.
+5. Treat `job/source.pdf` as a one-page raster carrier. Reuse the scan adapter's
    extraction, manifest, cleanup, and build utilities, but do not call its final
    verifier or apply its PDF gates. Do not run the PDF classifier.
-5. Run `scripts/image_pdf_bridge.py unwrap <translated.pdf> <job/image-metadata.json> <output-image>`.
+6. Run `scripts/image_pdf_bridge.py unwrap <translated.pdf> <job/image-metadata.json> <output-image>`.
    Unwrap is allowed only when the sibling scan build report identifies the
    official scan builder and its output hash matches `translated.pdf`.
-6. Compare the final image with the original once at full view. Inspect at high
+7. Compare the final image with the original once at full view. Inspect at high
    zoom only changed regions and anomalies reported by automatic checks.
    Complete the whole-image semantic accuracy review and save the adapter-owned
    `translation-review.json` against the final image hash before delivery.

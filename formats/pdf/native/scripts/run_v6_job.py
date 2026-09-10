@@ -69,7 +69,12 @@ def _artifact(job: dict[str, Any], name: str) -> Path:
     return Path(record["path"])
 
 
-def init_job(source: Path, jobs_root: Path) -> Path:
+def init_job(
+    source: Path,
+    jobs_root: Path,
+    source_language: str = "zh",
+    target_language: str = "en",
+) -> Path:
     if not any(native_char_count(page) for page in PdfReader(source).pages):
         raise ValueError('scan-only PDF (possibly hidden OCR); use translate-scan-pdf-professionally')
     job_dir = state.create_job(source, jobs_root)
@@ -84,9 +89,9 @@ def init_job(source: Path, jobs_root: Path) -> Path:
             "--manifest",
             manifest,
             "--source-language",
-            "zh",
+            source_language,
             "--target-language",
-            "en",
+            target_language,
         )
     manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
     if not any(page.get("blocks") for page in manifest_data.get("pages", [])):
@@ -527,6 +532,8 @@ def main() -> None:
     init_parser = commands.add_parser("init")
     init_parser.add_argument("source", type=Path)
     init_parser.add_argument("--jobs-root", type=Path, required=True)
+    init_parser.add_argument("--source-language", default="zh")
+    init_parser.add_argument("--target-language", default="en")
     for command in ("status", "resume", "build-native", "build-images", "assemble"):
         child = commands.add_parser(command)
         child.add_argument("job", type=Path)
@@ -541,7 +548,12 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "init":
-            job_dir = init_job(args.source, args.jobs_root)
+            job_dir = init_job(
+                args.source,
+                args.jobs_root,
+                args.source_language,
+                args.target_language,
+            )
             print(json.dumps({"job_dir": str(job_dir)}))
         elif args.command == "status":
             print(json.dumps(state.load_job(args.job), ensure_ascii=False))

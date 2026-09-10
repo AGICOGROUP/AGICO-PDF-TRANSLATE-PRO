@@ -20,6 +20,20 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EmptyImageTextTests(unittest.TestCase):
+    def test_latin_font_falls_back_for_actual_chinese_labels(self):
+        latin = Path(r"C:\Windows\Fonts\arial.ttf")
+        if not latin.exists():
+            self.skipTest("Windows font fixture unavailable")
+        MODULE.register_fonts(latin, latin, ("凹套", "凸套"))
+        for name, text in ((MODULE.FONT_REGULAR, "凹套"), (MODULE.FONT_BOLD, "凸套")):
+            font = MODULE.pdfmetrics.getFont(name)
+            self.assertTrue(all(font.face.charToGlyph.get(ord(char), 0) for char in text))
+
+    def test_unsupported_character_is_rejected_before_drawing(self):
+        with self.assertRaisesRegex(ValueError, "lacks glyphs"):
+            MODULE.register_fonts(MODULE.default_font(False), MODULE.default_font(True),
+                                  ("\U0010ffff", ""))
+
     def test_default_fonts_include_chinese_glyphs(self):
         MODULE.register_fonts(MODULE.default_font(False), MODULE.default_font(True))
         regular = MODULE.pdfmetrics.getFont(MODULE.FONT_REGULAR)

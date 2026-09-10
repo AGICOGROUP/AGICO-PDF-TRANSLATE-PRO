@@ -89,6 +89,31 @@ def routed_review(image_id: str, method: str = "deterministic_cleanup") -> dict:
 
 
 class RunV6JobTests(unittest.TestCase):
+    def test_init_writes_explicit_source_and_target_languages(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source.pdf"
+            make_pdf(source)
+
+            result = run(
+                "init",
+                source,
+                "--jobs-root",
+                root / "jobs",
+                "--source-language",
+                "ru",
+                "--target-language",
+                "zh-CN",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            job_dir = Path(json.loads(result.stdout)["job_dir"])
+            manifest = json.loads(
+                (job_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("ru", manifest["source_language"])
+            self.assertEqual("zh-CN", manifest["target_language"])
+
     def test_init_creates_source_bound_job_and_resume_requests_translation(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

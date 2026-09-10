@@ -70,8 +70,14 @@ whitespace:
    place at `x = x0`, `y = y1 + 2`.
 3. **Adjacent empty cell**: for table layouts with empty columns, place inside
    the empty cell's bbox.
-4. **Margin footnote**: if no in-cell space exists, place a numbered marker
-   next to the source and the full translation in the page margin.
+4. **Adjacent table group**: if cells are full, inspect the whole table's left
+   and right whitespace, then immediately above or below it. Place a compact
+   translated table or aligned list there with the same row order and identifiers.
+   Avoid existing symbols and lines, including those missed by text extraction.
+5. **Nearest usable margin**: only if nearby placement cannot remain readable
+   and unobstructed, use linked numbered notes. Existing row numbers/codes can
+   supply the link. A larger blank area at the opposite end of the sheet is not
+   a reason to separate a table from its translation.
 
 The `x, y` in the record are the top-left corner of the translation text (in
 PDF points, origin top-left, y increases downward).

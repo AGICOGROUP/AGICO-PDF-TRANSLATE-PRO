@@ -143,4 +143,13 @@ headers, footers, and icons. Create `visual-review.json` using the contract in
 python scripts/verify_scan.py --source "input.pdf" --manifest "job/manifest/translation-manifest.json" --pdf "job/output/translated.pdf" --visual-review "job/review/visual-review.json" --report "job/qa/final-qa.json"
 ```
 
-If QA finds a blocking content/readability/structure issue, correct the affected block within the shared time budget. Re-render only affected pages and retain traceable unchanged-page reviews. Cosmetic warnings do not trigger repeated rebuilds. At the limit share a labelled preview with known issues.
+Schedule the first verification early enough within the existing time budget
+to inspect its anomalies and rerun verification. For automatic overlap findings,
+inspect the flagged local regions and classify them using `quality-gates.md`
+before deciding on repairs or final failure. Record confirmed false positives
+against the unchanged candidate and rerun verification without rebuilding.
+For actual content/readability/structure defects, correct only affected blocks
+within the remaining budget; re-render affected pages and retain traceable
+unchanged-page reviews. Cosmetic warnings do not trigger rebuilds. At the limit
+share a labelled preview, distinguishing confirmed defects from unreviewed
+automatic candidates; the time limit does not extend for this review.

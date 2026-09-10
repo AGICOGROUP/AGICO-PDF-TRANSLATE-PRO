@@ -50,11 +50,25 @@ def default_font(bold: bool) -> Path:
     raise FileNotFoundError("No suitable TrueType font found; pass --regular-font/--bold-font")
 
 
-def register_fonts(regular: Path, bold: Path) -> None:
-    if FONT_REGULAR not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont(FONT_REGULAR, str(regular)))
-    if FONT_BOLD not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(TTFont(FONT_BOLD, str(bold)))
+def register_fonts(regular: Path, bold: Path, texts: tuple[str, str] = ("", "")) -> None:
+    for name, requested, is_bold, text in zip(
+        (FONT_REGULAR, FONT_BOLD), (regular, bold), (False, True), texts
+    ):
+        required = {ord(char) for char in text if not char.isspace()}
+        candidates = [requested]
+        if required:
+            candidates.append(default_font(is_bold))
+        for path in dict.fromkeys(candidates):
+            font = TTFont(name, str(path))
+            missing = required.difference(
+                code for code, glyph in font.face.charToGlyph.items() if glyph
+            )
+            if not missing:
+                pdfmetrics.registerFont(font)
+                break
+        else:
+            characters = " ".join(f"U+{code:04X}" for code in sorted(missing))
+            raise ValueError(f"Image text font lacks glyphs: {characters}; supply a covering font")
 
 
 def pixel_box_to_page(
@@ -208,7 +222,6 @@ def apply(
     regular_font: Path,
     bold_font: Path,
 ) -> None:
-    register_fonts(regular_font, bold_font)
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     # With no image-localized regions there is nothing to overlay. Rewriting
     # the PDF through pypdf in this case can damage masked source images (for
@@ -217,6 +230,11 @@ def apply(
         output_pdf.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(input_pdf, output_pdf)
         return
+    regions = [region for item in metadata["images"] for region in item["regions"]]
+    texts = tuple("".join(region.get("text", "") for region in regions
+                         if bool(region.get("bold")) == bold)
+                  for bold in (False, True))
+    register_fonts(regular_font, bold_font, texts)
     base = metadata_path.parent
     by_page: dict[int, list[dict]] = {}
     for item in metadata["images"]:

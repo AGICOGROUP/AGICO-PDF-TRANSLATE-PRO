@@ -167,8 +167,15 @@ Place target-language translations using these priorities, in order:
 2. **Below the source span** — when vertical whitespace exists in the same
    cell or margin area. Use 60–80% of source size.
 3. **In an adjacent empty cell** — for tables with empty columns or rows.
-4. **In the page margin** — when no in-cell space is available, place a
-   numbered footnote in the margin and link it to the source block.
+4. **Beside the source table** — when cells are full, inspect whitespace to
+   the left and right of the whole table, then immediately above or below it.
+   Keep its translations together in a compact adjacent table or aligned list,
+   preserving row order, numbers and field correspondence. Check the actual
+   artwork in that space; an equipment symbol or line is not empty space.
+5. **In the nearest usable page margin** — only when nearby placement cannot
+   remain readable without obstruction, use linked numbered notes. Do not move
+   a bottom table's translation to the page top merely because that space is
+   larger. Reuse existing row numbers or codes when they identify entries clearly.
 
 Never place translation text on top of source text, on table borders, on
 images, or on vector graphics lines.
@@ -212,8 +219,8 @@ failed/unverified status; do not claim that a preview passed acceptance.
 
 - If a translation does not fit in available whitespace, reduce font size
   (floor: 5pt) or shorten the translation wording before relocating.
-- If no whitespace exists near a source block, place a numbered footnote in
-  the page margin.
+- For crowded tables, try an adjacent grouped translation before margin notes;
+  use the nearest readable unobstructed area and preserve clear source links.
 - Never delete or modify source content to make room for translations.
 - Never generate translations for unreadable text — record it as a
   `[CONFIRM]` item.

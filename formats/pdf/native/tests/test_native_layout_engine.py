@@ -143,6 +143,34 @@ class SourceTypographyTests(unittest.TestCase):
 
 
 class PageLayoutWrapperTests(unittest.TestCase):
+    def test_layout_enrichment_keeps_reviewed_cells_when_detection_is_empty(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "raster-grid.pdf"
+            pdf = canvas.Canvas(str(source), pagesize=(200, 200))
+            pdf.drawString(20, 150, "Label Value")
+            pdf.save()
+
+            reviewed_cells = [
+                {"bbox": [10.0, 30.0, 90.0, 60.0]},
+                {"bbox": [90.0, 30.0, 190.0, 60.0]},
+            ]
+            manifest = {
+                "pages": [{
+                    "page": 1,
+                    "width": 200.0,
+                    "height": 200.0,
+                    "table_cells": reviewed_cells,
+                    "blocks": [block(
+                        "p0001-b0001", "Label Value", "标签 值",
+                        [20.0, 38.0, 90.0, 52.0], size=12,
+                    )],
+                }],
+            }
+
+            pipeline.enrich_manifest_layout(source, manifest)
+
+            self.assertEqual(reviewed_cells, manifest["pages"][0]["table_cells"])
+
     def test_full_width_header_body_and_footer_rows_are_unwrapped_together(self):
         page = {
             "page": 1,
