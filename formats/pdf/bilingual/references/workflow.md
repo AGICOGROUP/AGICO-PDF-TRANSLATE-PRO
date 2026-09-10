@@ -4,20 +4,15 @@
 
 ### Step 1 — Route the PDF
 
-Run the project's standard router to confirm the PDF contains selectable native
-text:
+Use the output mode determined by the user's request in the PDF routing skill:
 
 ```powershell
-python formats/pdf/scripts/route_pdf_file.py <source.pdf>
+python formats/pdf/scripts/route_pdf_file.py <source.pdf> --mode <auto|replace|bilingual>
 ```
 
-If the router returns `scan-only`, the PDF has no selectable text. You have two
-options:
-- OCR the PDF first to obtain text coordinates, then use this skill with the
-  OCR'd layout.
-- Use `formats/pdf/scan/SKILL.md` for replacement translation instead.
-
-If the router returns `native-text` or `mixed`, proceed to Step 2.
+Follow the returned adapter. `scan-only` uses the scan adapter with its returned
+mode; a replacement route uses its replacement adapter. Only proceed here when
+the returned adapter is bilingual. “翻译为英文版/中文版” alone means replacement.
 
 ### Step 2 — Inspect the layout
 
@@ -32,6 +27,12 @@ Review the JSON output to understand:
 - Which spans are body text, headers, table headers, table cells, labels.
 - Available whitespace around each span (gaps between spans, margins, empty
   cells).
+
+Native text may cover only a company name or tags. Compare with the complete
+source drawing; use OCR for missing outline/image labels, particularly on
+`ocr_recommended_pages`. Verify pixel-to-PDF coordinates and add these labels
+to the same inventory. The overlay accepts coordinate bindings without native
+span IDs. Preserve vectors; do not invoke a second output adapter.
 
 ### Step 3 — Build the translation packet
 
@@ -110,8 +111,8 @@ python -c "import fitz; d=fitz.open('<job>/bilingual-output.pdf'); [p.get_pixmap
 ```
 
 Inspect each rendered page for:
-- Source text unchanged and selectable.
-- Chinese translations readable and correctly placed.
+- Source content unchanged; originally selectable text remains selectable.
+- Requested target-language translations readable and correctly placed.
 - No overlap with source text, borders, or images.
 - No missing glyphs (tofu boxes).
 - Consistent font sizes within each role group.

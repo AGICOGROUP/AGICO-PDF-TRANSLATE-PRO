@@ -88,6 +88,7 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual(BILINGUAL_ADAPTER, report["adapter"])
             self.assertEqual("add_bilingual", report["translation_mode"])
             self.assertEqual("inspect_bilingual_coverage", report["next_action"])
+            self.assertEqual([1], report["ocr_recommended_pages"])
 
     def test_explicit_replace_routes_native_engineering_drawing_to_native_cad(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -102,6 +103,7 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
             self.assertEqual("replace", report["translation_mode"])
             self.assertEqual("translate", report["next_action"])
+            self.assertEqual([1], report["ocr_recommended_pages"])
 
     def test_explicit_replace_routes_mixed_engineering_drawing_to_native_cad(self):
         with tempfile.TemporaryDirectory() as directory:

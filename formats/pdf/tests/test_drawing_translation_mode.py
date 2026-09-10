@@ -13,6 +13,32 @@ DECIDER = ROOT / "formats" / "pdf" / "scripts" / "decide_drawing_translation.py"
 
 
 class DrawingTranslationModeTests(unittest.TestCase):
+    def test_saved_route_overrides_missing_or_wrong_inventory_kind_and_mode(self):
+        # Complete bilingual counts must never skip an explicit replacement.
+        for kind in (None, "document"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                route = Path(directory) / "route.json"
+                route.write_text(json.dumps({"document_kind": "engineering-drawing",
+                                             "translation_mode": "replace", "error": None}), encoding="utf-8")
+                payload = {"document_kind": kind, "translation_mode": "add_bilingual",
+                           "clear_chinese_label_count": 2, "clear_foreign_label_count": 2,
+                           "matched_bilingual_pair_count": 2}
+                result = subprocess.run(
+                    [sys.executable, str(DECIDER), "--inventory-json", json.dumps(payload),
+                     "--route-report", str(route)], capture_output=True, text=True, encoding="utf-8")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("replace", json.loads(result.stdout)["action"])
+
+    def test_missing_kind_does_not_silently_select_replacement(self):
+        result = subprocess.run([sys.executable, str(DECIDER), "--inventory-json", "{}"],
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("route-report", json.loads(result.stdout)["error"])
+
+    def test_explicit_bilingual_document_keeps_additive_mode(self):
+        decision = self.decide({"document_kind": "document", "translation_mode": "add_bilingual"})
+        self.assertEqual("add_bilingual", decision["action"])
+
     def decide(self, payload: dict) -> dict:
         result = subprocess.run(
             [sys.executable, str(DECIDER), "--inventory-json", json.dumps(payload)],

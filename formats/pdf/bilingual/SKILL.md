@@ -2,8 +2,9 @@
 name: translate-pdf-bilingual-overlay
 description: >-
   Use when a PDF is an engineering drawing or the user wants to keep the original
-  text visible and add Chinese translation beside it in surrounding whitespace.
-  Triggers on engineering drawings, "保留原文加翻译", "双语版",
+  text visible and add the requested translation beside it in surrounding whitespace.
+  Triggers on engineering drawings in auto mode, "加上中文/英文/其他语言",
+  "保留原文加翻译", "做成双语版", "变为双语版", "双语版",
   "bilingual", "中英对照", "原文后面加中文", "在空白处加翻译",
   "dual-language PDF". Do NOT use this skill when the user wants the original
   text replaced by translation — for replacement use the native or scan adapter
@@ -16,19 +17,26 @@ description: >-
 ## Purpose
 
 Produce a bilingual PDF where the source-language original remains fully
-visible and selectable, and the Chinese translation is placed beside it in
+visible (and selectable where originally selectable), and the requested target-language translation is placed beside it in
 available whitespace. This is fundamentally different from replacement
 translation: nothing in the source is removed, overwritten, or flattened.
 
 Use this skill when the user explicitly wants both languages visible or when
 the PDF router classifies the file as an engineering drawing in `auto` mode.
-Drawings default to bilingual overlay for ordinary wording such as
-“翻译为中文版/英文版”. An explicit request to remove or replace the source text
-takes precedence: native/mixed drawings then use `formats/pdf/native-cad/SKILL.md`.
+Drawings default to bilingual only when output is unspecified, such as
+“翻译这个文件”. A named single-language output such as “翻译为中文版/英文版”
+uses replacement: native/mixed drawings use `formats/pdf/native-cad/SKILL.md`.
+Explicit “加上中文/英文/其他语言”, “添加翻译”, “做成/变为双语版” or
+“保留原文/双语/对照” means retaining the original and adding the target language.
+This takes precedence even when the same request says “翻译为英文/中文”.
+Respect negation; “不要双语版” does not request bilingual output.
 
 Before translation, inventory every clear Chinese and foreign label and run
 `python ../scripts/decide_drawing_translation.py --inventory-file
-<drawing-language-inventory.json>`. When it returns
+<drawing-language-inventory.json> --route-report <job>/route-report.json`.
+Use the router's document kind and mode, not a guessed inventory classification.
+If the authoritative route says `replace`, select its replacement adapter before
+building an output. When the coverage decision returns
 `already_bilingual_complete`, preserve and deliver the exact source PDF as an
 already-completed bilingual drawing. Do not translate, rebuild, or add another
 language. Continue automatically for every other decision; do not pause after
@@ -41,7 +49,7 @@ the workflow starts.
 | Replace source text in an ordinary PDF | `formats/pdf/native/SKILL.md` or `formats/pdf/scan/SKILL.md` |
 | Replace source text in a native/mixed engineering drawing | `formats/pdf/native-cad/SKILL.md` |
 | Keep source text, add translation beside it | **this skill** |
-| Engineering drawing, ordinary translation wording | **this skill** |
+| Engineering drawing, output mode and target language unspecified | **this skill** |
 | Complete Chinese + one-foreign-language drawing | Preserve source; mark complete |
 
 Never run this skill and a replacement adapter on the same output. The two
@@ -54,8 +62,9 @@ operators; this skill preserves them.
 - A CJK TrueType font available on the system. The skill defaults to
   `C:\Windows\Fonts\simhei.ttf` (SimHei / 黑体). Override via `--font-file`.
   `simsun.ttc` and `msyh.ttc` also work.
-- Source PDF must contain selectable native text. For scan-only PDFs, run OCR
-  first to obtain text coordinates, then use this skill with the OCR'd layout.
+- Use the PDF router's selected adapter. Scan-only inputs use the scan adapter.
+  Native/mixed drawings may contain outlined or image labels. Their reviewed
+  page coordinates are valid bindings; a native text span ID is not required.
 
 ## Workflow
 
@@ -73,9 +82,16 @@ Review the JSON output. Each entry contains `page`, `bbox` (x0, y0, x1, y1),
 available whitespace around each one (gap to the next span, margin, or empty
 table cell).
 
+Compare this inventory with the whole sheet, especially when the router flags
+`ocr_recommended_pages`. For missing outline/image labels, OCR source renders
+and map pixel boxes to PDF points, then verify each label against the source.
+Add unique IDs, exact source text and page coordinates to the same inventory.
+The overlay script already accepts coordinate records; do not stop merely
+because these labels have no native text objects. Keep source vectors intact.
+
 ### 2. Build the translation packet
 
-Create a translations JSON file mapping each text span to its Chinese
+Create a translations JSON file mapping each reviewed label to its target-language
 translation and the coordinates where the translation should be placed:
 
 ```json
@@ -93,7 +109,7 @@ translation and the coordinates where the translation should be placed:
 ]
 ```
 
-- `x`, `y` — top-left point where the Chinese text begins (in PDF points,
+- `x`, `y` — top-left point where the translated text begins (in PDF points,
   origin top-left, y-down).
 - `fontsize` — override per-block; omit to use the default (6.8).
 - Optional fields: `max_width` (auto-wrap threshold), `align` (`left` |
@@ -135,15 +151,15 @@ python -c "import fitz; d=fitz.open('<job>/bilingual-output.pdf'); [p.get_pixmap
 ```
 
 Check each page for:
-- Source text is unchanged and still selectable.
-- Chinese translations are readable and correctly placed in whitespace.
+- Source text is unchanged; originally selectable text stays selectable.
+- Target-language translations are readable and correctly placed in whitespace.
 - No translation overlaps source text, table borders, or images.
 - No clipping or missing glyphs (tofu boxes □).
 - Font sizes are consistent within each role group (headers, body, labels).
 
 ## Translation placement guidelines
 
-Place Chinese translations using these priorities, in order:
+Place target-language translations using these priorities, in order:
 
 1. **Right of the source span** — when there is horizontal whitespace to the
    right of the original text. Use a slightly smaller font size (70–90% of
@@ -171,13 +187,13 @@ images, or on vector graphics lines.
 
 Deliver only when every gate passes:
 
-1. Source text remains visible, selectable, and unchanged on every page.
-2. Every visible source-language block has a Chinese translation placed in
+1. Source text remains visible and unchanged; originally selectable text stays selectable.
+2. Every visible source-language block has the requested target-language translation placed in
    nearby whitespace.
 3. No translation overlaps source text, table borders, images, or vector
    graphics.
 4. Page count, page size, rotation, and all non-text pixels match the source.
-5. Chinese text uses an embedded CJK font — no missing-glyph boxes.
+5. Translations use an embedded font supporting the target language — no missing-glyph boxes.
 6. Font sizes are consistent within each role group on each page.
 7. Numbers, units, standards, and model codes are preserved untranslated.
 8. The build report identifies `translate-pdf-bilingual-overlay`, binds source,

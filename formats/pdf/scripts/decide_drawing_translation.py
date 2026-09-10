@@ -18,8 +18,19 @@ COUNT_FIELDS = (
 )
 
 
-def decide(inventory: dict[str, object]) -> dict[str, object]:
-    if inventory.get("document_kind") != "engineering-drawing":
+def decide(inventory: dict[str, object], route_report: dict | None = None) -> dict[str, object]:
+    context = route_report if route_report is not None else inventory
+    if context.get("error"):
+        raise ValueError("resolve the PDF routing error before checking language coverage")
+    kind = context.get("document_kind")
+    if kind not in ("document", "engineering-drawing"):
+        raise ValueError("document_kind is missing or invalid; supply the saved --route-report")
+    mode = context.get("translation_mode")
+    if mode is None and route_report is None:
+        mode = "add_bilingual" if kind == "engineering-drawing" else "replace"
+    if mode not in ("replace", "add_bilingual"):
+        raise ValueError("translation_mode must come from a successful router result")
+    if mode == "replace":
         return {
             "status": "translation_required",
             "action": "replace",
@@ -33,7 +44,8 @@ def decide(inventory: dict[str, object]) -> dict[str, object]:
     foreign = counts["clear_foreign_label_count"]
     matched = counts["matched_bilingual_pair_count"]
     complete = (
-        chinese > 0
+        kind == "engineering-drawing"
+        and chinese > 0
         and foreign > 0
         and matched == chinese == foreign
         and counts["unmatched_chinese_label_count"] == 0
@@ -61,6 +73,8 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--inventory-json")
     source.add_argument("--inventory-file", type=Path)
+    parser.add_argument("--route-report", type=Path,
+                        help="saved router JSON; authoritative output mode and document kind")
     args = parser.parse_args()
     try:
         raw = (
@@ -69,7 +83,8 @@ def main() -> int:
             else args.inventory_json
         )
         inventory = json.loads(raw)
-        result = decide(inventory)
+        route_report = json.loads(args.route_report.read_text(encoding="utf-8-sig")) if args.route_report else None
+        result = decide(inventory, route_report)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
         return 2

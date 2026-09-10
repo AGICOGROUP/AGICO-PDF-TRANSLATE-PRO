@@ -52,6 +52,11 @@ def report(
         "translation_mode": translation_mode,
         "next_action": next_action,
         "drawing_evidence": drawing_evidence or [],
+        # A capability hint, not a scan classification or completeness claim.
+        "ocr_recommended_pages": [
+            index for index, count in enumerate(native_char_counts or [], start=1)
+            if document_kind == "engineering-drawing" and count <= 100
+        ],
         "error": error,
     }
 

@@ -18,9 +18,19 @@ Choose exactly one adapter from the actual file format:
 
 Reject unsupported formats, animated images, and multi-page image containers. Never merge adapter workflows. File format selects the top-level adapter; PDF content inspection selects the PDF sub-adapter.
 
-Output mode follows the user's explicit requirement. Monolingual / 单语 / 仅中文
-means `replace`, including engineering drawings; preserve-original / 双语 means
-`bilingual`. With no explicit mode, use `auto`: ordinary documents replace text,
+Output mode follows the user's requested result, for every target language:
+
+- “翻译为英文/中文”, “翻译成英文/中文”, “英文版/中文版” or another single
+  target-language translation means `replace`: replace the source-language text
+  with the target language, including on engineering drawings.
+- “加上中文/英文/其他语言”, “添加翻译”, “做成双语版”, “变为双语版”,
+  “保留原文”, “对照” or an affirmative request for a bilingual version means
+  `bilingual`: retain the original language and add the requested target language.
+  This explicit additive/bilingual intent takes precedence even when the same
+  request also says “翻译为英文/中文”. Interpret negation normally: “不要双语版”
+  is not an affirmative bilingual request.
+
+Use `auto` only when neither intent is specified: ordinary documents replace text,
 engineering drawings add bilingual text. Scan supports either mode; native-CAD
 is specialized replacement for native/mixed engineering drawings. Determine
 content with the router, not with the output-language wording.
