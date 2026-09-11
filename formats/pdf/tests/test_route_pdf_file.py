@@ -105,6 +105,22 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual("translate", report["next_action"])
             self.assertEqual([1], report["ocr_recommended_pages"])
 
+    def test_routes_very_large_cad_sheet_with_many_dimension_labels_to_native_cad(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "dense-dimension-drawing.pdf"
+            page = canvas.Canvas(str(source), pagesize=(3430, 1726))
+            page.rect(30, 30, 3370, 1666)
+            for row in range(220):
+                page.drawString(80 + (row % 3) * 1050, 1600 - (row % 100) * 14, "DIMENSION 100 +/- 0.2")
+            page.save()
+
+            result = self.run_router(source, mode="replace")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
+
     def test_explicit_replace_routes_mixed_engineering_drawing_to_native_cad(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

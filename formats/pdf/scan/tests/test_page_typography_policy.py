@@ -6,16 +6,23 @@ import unittest
 from pathlib import Path
 
 from PIL import Image
+from reportlab.pdfbase import pdfmetrics
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import build_scan
 from build_scan import apply_page_typography_policy, build_pdf, register_fonts, resolve_page_typography, typography_group
 
 
 class PageTypographyPolicyTests(unittest.TestCase):
+    def test_korean_target_uses_hangul_capable_font(self) -> None:
+        register_fonts("ko-KR")
+        filename = str(pdfmetrics.getFont(build_scan.REGULAR_FONT).face.filename).lower()
+        self.assertIn("malgun", filename)
+
     def test_role_groups_are_stable(self) -> None:
         self.assertEqual(typography_group("title"), "major_title")
         self.assertEqual(typography_group("subheading"), "minor_title")

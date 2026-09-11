@@ -22,6 +22,8 @@ REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\arial.ttf"), Path("/usr/share/font
 BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\arialbd.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
 CJK_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\msyh.ttc")]
 CJK_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\msyhbd.ttc")]
+KOREAN_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\malgun.ttf"), *CJK_REGULAR_FONT_PATHS]
+KOREAN_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\malgunbd.ttf"), *CJK_BOLD_FONT_PATHS]
 REGULAR_FONT = "ScanTranslation-Regular"
 BOLD_FONT = "ScanTranslation-Bold"
 OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
@@ -88,11 +90,14 @@ def _first_existing(paths: list[Path]) -> Path:
 
 def register_fonts(target_language: str = "") -> None:
     global REGULAR_FONT, BOLD_FONT
-    is_cjk = str(target_language).lower().replace("_", "-").startswith(("zh", "ja", "ko"))
-    REGULAR_FONT = "ScanTranslation-CJK-Regular" if is_cjk else "ScanTranslation-Regular"
-    BOLD_FONT = "ScanTranslation-CJK-Bold" if is_cjk else "ScanTranslation-Bold"
-    regular_paths = CJK_REGULAR_FONT_PATHS if is_cjk else REGULAR_FONT_PATHS
-    bold_paths = CJK_BOLD_FONT_PATHS if is_cjk else BOLD_FONT_PATHS
+    language = str(target_language).lower().replace("_", "-")
+    is_korean = language.startswith("ko")
+    is_cjk = language.startswith(("zh", "ja", "ko"))
+    font_family = "Korean" if is_korean else "CJK" if is_cjk else "Latin"
+    REGULAR_FONT = f"ScanTranslation-{font_family}-Regular"
+    BOLD_FONT = f"ScanTranslation-{font_family}-Bold"
+    regular_paths = KOREAN_REGULAR_FONT_PATHS if is_korean else CJK_REGULAR_FONT_PATHS if is_cjk else REGULAR_FONT_PATHS
+    bold_paths = KOREAN_BOLD_FONT_PATHS if is_korean else CJK_BOLD_FONT_PATHS if is_cjk else BOLD_FONT_PATHS
     if REGULAR_FONT not in pdfmetrics.getRegisteredFontNames():
         pdfmetrics.registerFont(TTFont(REGULAR_FONT, str(_first_existing(regular_paths))))
         pdfmetrics.registerFont(TTFont(BOLD_FONT, str(_first_existing(bold_paths))))

@@ -70,7 +70,11 @@ def classify_document_kind(
         for index, (width, height) in enumerate(page_sizes, start=1)
         if width > height and width >= 1000 and width * height >= 1_000_000
     ]
-    low_prose_density = max(native_char_counts or [0]) <= 3000
+    low_prose_density = all(
+        count <= 3000
+        or count / max((width * height) / 1_000_000, 1) <= 1000
+        for (width, height), count in zip(page_sizes, native_char_counts)
+    )
     if large_landscape_pages and low_prose_density:
         return "engineering-drawing", [
             "large_landscape_sheet",
