@@ -110,6 +110,14 @@ def test_typography_baseline_does_not_follow_each_ocr_box():
     assert baselines[(0, 'body')] == 11
 
 
+def test_typography_baseline_recovers_scaled_cad_text_size_from_bbox():
+    records = [dict(id='title', page=0, font_size=.675,
+                    bbox=[100, 70, 190, 92], rotation=0)]
+    packet = {'title': {'role': 'title'}}
+    baselines = cad.typography_baselines(records, packet)
+    assert baselines[(0, 'title')] >= 14
+
+
 def test_reviewed_cover_replaces_only_region_and_retains_vectors(tmp_path):
     source = tmp_path / 'input.pdf'
     with pymupdf.open() as doc:
@@ -134,6 +142,34 @@ def test_reviewed_cover_replaces_only_region_and_retains_vectors(tmp_path):
         assert len(result[0].get_drawings()) >= len(original[0].get_drawings())
         clip = pymupdf.Rect(0, 90, 200, 110)
         assert original[0].get_pixmap(clip=clip).samples == result[0].get_pixmap(clip=clip).samples
+
+
+def test_outline_cover_still_protects_overlapping_native_text(tmp_path):
+    source = tmp_path / 'input.pdf'
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=200, height=120)
+        page.insert_text((30, 50), 'RELIEF')
+        doc.save(source)
+    job = tmp_path / 'job'
+    cad.prepare(source, job)
+    inventory = cad.read_json(job / cad.INVENTORY_NAME)
+    native = next(r for r in inventory['records'] if r.get('kind') != 'outline')
+    outline = dict(id='p0001-o-overlap', source='RELIEF', page=0,
+                   bbox=native['bbox'], kind='outline', status='pending',
+                   font_size=10, color=0, rotation=0)
+    inventory['records'].append(outline)
+    cad.write_json(job / cad.INVENTORY_NAME, inventory)
+    packet = cad.read_json(job / cad.PACKET_NAME)
+    packet['records'][0].update(status='translated', translation='凸纹')
+    packet['records'].append({**outline, 'status': 'cover_only',
+                              'target_present': '凸纹',
+                              'review_note': 'Same native text is retranslated.',
+                              'cover_review': {'approved': True, 'text_only': True,
+                                               'white_background': True, 'source_text_paths': True,
+                                               'note': 'Inspected text-only overlap.'}})
+    cad.write_json(job / cad.PACKET_NAME, packet)
+    assert cad.apply(job, job / cad.PACKET_NAME, cad.DEFAULT_FONT) == 2
+    assert cad.read_json(job / cad.APPLY_REPORT_NAME)['failures'] == ['unsafe_outline_regions']
 
 
 def test_reviewed_cover_can_restore_a_crossing_pipe(tmp_path):

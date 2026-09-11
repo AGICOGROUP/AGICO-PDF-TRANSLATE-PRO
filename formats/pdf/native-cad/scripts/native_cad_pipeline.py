@@ -230,6 +230,22 @@ def validate_packet(
     incomplete.extend(f'unexpected:{key}' for key in supplied.keys() - expected.keys())
     for record_id, source_record in expected.items():
         translated = supplied.get(record_id)
+        if translated and translated.get('status') == 'merged':
+            leader_id = translated.get('merged_into')
+            leader = supplied.get(leader_id, {})
+            origin = expected.get(leader_id, {})
+            if (translated.get('source') == source_record['source']
+                    and source_record.get('kind') != 'outline'
+                    and origin.get('kind') != 'outline'
+                    and leader.get('status') == 'translated'
+                    and str(leader.get('translation', '')).strip()
+                    and origin.get('page') == source_record['page']
+                    and origin.get('rotation') == source_record.get('rotation')
+                    and leader.get('layout_box')
+                    and str(translated.get('review_note', '')).strip()):
+                continue
+            incomplete.append(record_id)
+            continue
         if (translated and translated.get('source') == source_record['source']
                 and translated.get('status') in ('dismissed', 'preserved')
                 and str(translated.get('review_note', '')).strip()
@@ -307,7 +323,13 @@ def typography_baselines(records, supplied):
     groups = {}
     for record in records:
         role = supplied[str(record['id'])].get('role', 'body')
-        groups.setdefault((int(record['page']), role), []).append(float(record['font_size']))
+        box = pymupdf.Rect(record.get('bbox', (0, 0, 0, 0)))
+        rotation = int(record.get('rotation', 0)) % 360
+        line_height = box.width if rotation in (90, 270) else box.height
+        effective_size = float(record['font_size'])
+        if record.get('kind') != 'outline' and line_height > effective_size * 4:
+            effective_size = line_height * .7
+        groups.setdefault((int(record['page']), role), []).append(effective_size)
     baseline = {key: max(4, median(sizes)) for key, sizes in groups.items()}
     for page, _ in groups:
         body = baseline.get((page, 'body'))
@@ -400,7 +422,7 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         return 2
 
     document = pymupdf.open(bound_source)
-    covered = [record for record in inventory["records"] if record["status"] == "pending" and supplied[str(record['id'])].get('status') in ('translated', 'cover_only')]
+    covered = [record for record in inventory["records"] if record["status"] == "pending" and supplied[str(record['id'])].get('status') in ('translated', 'cover_only', 'merged')]
     by_page: dict[int, list[dict[str, object]]] = {}
     for record in covered:
         by_page.setdefault(int(record["page"]), []).append(record)
@@ -475,6 +497,8 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
             font_file, commit=False,
         )
     fit_failures = [key for key, size in fitted_sizes.items() if size is None]
+    fit_failures.extend(r['id'] for r in covered
+                        if supplied[str(r['id'])].get('merged_into') in fit_failures)
     for page_index, records in by_page.items():
         page = document[page_index]
         records = [r for r in records if r['id'] not in fit_failures]

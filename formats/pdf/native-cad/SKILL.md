@@ -37,7 +37,9 @@ Use the supplied commands instead of writing document-specific helper scripts.
 
 Keep IDs and source unchanged; record corrections in source_correction and
 review_note. Before translation, read continuous technical requirements as a
-whole and reconcile overlapping OCR fragments. Reflow each complete numbered
+whole and reconcile overlapping OCR fragments. Native spans can be individual
+words: translate the complete label, cell or paragraph, never a word dictionary
+placed back in source-language order. Reflow each complete phrase or numbered
 clause once within its reviewed whitespace, retaining numbering, subclauses,
 all constraints, values and units. Do not summarize clauses, combine unrelated
 fields, or infer missing limits from engineering convention. Keep original
@@ -47,6 +49,25 @@ only the numeric or identifier portion is language-independent.
 Reuse repeated wording after checking equipment and local meaning. Mark confirmed tags or existing target
 text preserved with a reason; dismissed is for reviewed OCR false positives,
 never unread or inconvenient prose.
+Protection patterns are suggestions: tokens such as `SE` can be ordinary
+source-language words inside a sentence. Check them in context; if a protected
+record is prose, change its inventory status to pending and include it in the
+packet with its original ID/source before translating. Likewise, dismiss OCR
+only after matching its full content to retained source records, not all OCR
+records together merely because native text exists.
+
+For a native phrase split across records, keep every ID and source unchanged.
+Choose one leader with `status: translated`, the complete fluent translation
+and a reviewed `layout_box` for that phrase. Set the other native members to
+`status: merged`, `merged_into: <leader-id>`, empty translation and a
+`review_note` explaining the shared phrase. All members must share page and
+rotation. Apply removes their individual source glyphs and draws the leader
+once; if its translation cannot fit, it preserves the whole group's source.
+Group by actual sentence/cell and safe whitespace, not by proximity alone;
+do not absorb neighboring dimensions or cross table borders. This mechanism
+does not authorize outline covers. Never mark native words preserved merely
+because the target word order differs. Review the assembled Chinese sentence
+in place; isolated legible word crops do not establish semantic correctness.
 
 placement_proposal supplies cell_bbox, inset layout_box, all members and
 source_overflows_cell. It is a proposal, not approval:
@@ -84,8 +105,11 @@ layout_box for reviewed adjustments. Visual replacement is not secure deletion.
 Use consistent semantic roles: title, body (including ordinary table text),
 annotation. One page/role baseline applies, title > body > annotation; only
 a whole overflowing paragraph shrinks. Prefer safe whitespace before shrinking.
-OCR box height is an estimate, not a calibrated font size. Inspect representative
-body, title and annotation regions before applying. Do not force all drawings to
+OCR box height is an estimate, not a calibrated font size. Inspect
+native CAD labels for text-matrix scaling: an implausibly tiny reported size
+with a much taller visible line uses a line-height estimate in apply. Assign
+roles by meaning and source hierarchy, not just box height.
+Inspect representative body, title and annotation regions before applying. Do not force all drawings to
 8.5 pt or halve every estimated size based on a single document.
 Legacy table/footer roles remain supported, not arbitrary font-size groups.
 
