@@ -64,10 +64,13 @@ Create `<job>/translations.json` as an array of placement records:
 For each source span, examine its bbox `[x0, y0, x1, y1]` and find the nearest
 whitespace:
 
-1. **Right side**: if there is a gap between `x1` and the next column border or
-   the right margin, place the translation starting at `x = x1 + 5`.
-2. **Below**: if the row has vertical space below `y1` before the next row,
-   place at `x = x0`, `y = y1 + 2`.
+1. **Below or above**: anchor to the source block bbox. Compare usable space
+   below and above; prefer below when both fit. Start about 2–4pt beyond the
+   source bounds, aligning left edges or centers. Above placement must subtract
+   the measured translation height. Include underlines and nearby artwork when
+   judging usable space; a text-only gap may contain a dimension or leader.
+2. **Beside**: use the nearest side only if neither above nor below fits.
+   For rotated text, apply the same proximity rule in its reading direction.
 3. **Adjacent empty cell**: for table layouts with empty columns, place inside
    the empty cell's bbox.
 4. **Adjacent table group**: if cells are full, inspect the whole table's left
@@ -84,12 +87,12 @@ PDF points, origin top-left, y increases downward).
 
 #### How to choose font size
 
-- Title translations: 80–100% of source title size.
-- Body text: 70–90% of source body size.
-- Table headers: 70–85% of source header size.
-- Table cell content: 60–80% of source cell size.
-- Minimum readable size: 5pt. If text doesn't fit at 5pt, shorten the
-  translation wording.
+- Start at the corresponding source size, or 1–2pt smaller when needed.
+  Keep similar source roles/sizes consistent; do not use a fixed small size
+  throughout a large drawing.
+- Try the other nearby side or safe wrapping before further reduction.
+  The 5pt minimum is a last-resort floor, not a target. Concise wording must
+  retain the full technical meaning.
 
 #### How to choose max_width
 
@@ -110,7 +113,8 @@ python formats/pdf/bilingual/scripts/bilingual_overlay.py `
 
 ### Step 5 — Render and verify
 
-Render every page to a PNG at 2× zoom:
+Render the first candidate once for whole-sheet coverage review. Reuse that
+render for crops; use a higher-resolution crop only when detail is unreadable:
 
 ```powershell
 python -c "import fitz; d=fitz.open('<job>/bilingual-output.pdf'); [p.get_pixmap(matrix=fitz.Matrix(2,2)).save(f'<job>/preview_{i+1}.png') for i,p in enumerate(d)]"
@@ -125,9 +129,13 @@ Inspect each rendered page for:
 
 ### Step 6 — Iterate if needed
 
-If a translation overlaps or doesn't fit:
-1. Adjust the `x`, `y`, `fontsize`, or `max_width` in `translations.json`.
-2. Re-run Step 4.
-3. Re-render and verify again.
+Before the first build, derive positions and sizes from the inspected source
+bounds in one pass. Check proposed table placements against borders and artwork
+on the existing source render. This avoids trying several distant table areas.
 
-The source PDF is never modified, so iteration is safe and fast.
+If review finds overlaps or poor readability, batch the affected records into
+one packet update, rebuild, and inspect those changed regions. Reuse unchanged
+source inventory and translations within this job. Run final artifact checks
+against the final build; do not repeat repository unit tests or recreate
+equivalent QA scripts for an ordinary translation with unchanged adapter code.
+Do not rebuild for harmless cosmetic warnings alone.

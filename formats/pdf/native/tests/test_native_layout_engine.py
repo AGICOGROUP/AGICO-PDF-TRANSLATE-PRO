@@ -143,6 +143,41 @@ class SourceTypographyTests(unittest.TestCase):
 
 
 class PageLayoutWrapperTests(unittest.TestCase):
+    def test_cell_continuations_ignore_columns_in_unrelated_table(self):
+        page = {"page": 1, "width": 300, "height": 300,
+                "table_cells": [{"bbox": box} for box in
+                    ([10, 20, 50, 40], [50, 20, 100, 40],
+                     [10, 40, 50, 60], [50, 40, 100, 60],
+                     [10, 100, 100, 120], [100, 100, 200, 120],
+                     [10, 120, 100, 150], [100, 120, 200, 150])],
+                "blocks": [
+                    block("p0001-b0001", "Company", "Company", [15, 122, 90, 130], size=9),
+                    block("p0001-b0002", "Service", "Service", [15, 134, 45, 143], size=9)]}
+        page["blocks"][0]["manual_table_parts"] = [None]
+        flows, consumed = rebuild.build_table_cell_render_plan(page, pipeline)
+        self.assertEqual(1, len(flows))
+        self.assertEqual("Company Service", flows[0]["text"])
+        self.assertEqual({"p0001-b0001", "p0001-b0002"}, consumed)
+
+    def test_overlapping_block_boxes_do_not_duplicate_neighbor_line(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "overlapping.pdf"
+            pdf = canvas.Canvas(str(source), pagesize=(200, 200))
+            pdf.drawString(20, 150, "Company")
+            pdf.drawString(90, 140, "Contact")
+            pdf.save()
+            manifest = {"pages": [{"page": 1, "width": 200, "height": 200,
+                "blocks": [
+                    block("p0001-b0001", "Company", "公司", [18, 38, 160, 62], size=12),
+                    block("p0001-b0002", "Contact", "联系人", [88, 48, 140, 63], size=12),
+                ]}]}
+            for _ in range(2):
+                pipeline.enrich_manifest_layout(source, manifest)
+                first, second = manifest["pages"][0]["blocks"]
+                self.assertEqual(["Company"], [line["text"] for line in first["lines"]])
+                self.assertEqual(["Contact"], [line["text"] for line in second["lines"]])
+                self.assertEqual(14, len(first["characters"]) + len(second["characters"]))
+
     def test_layout_enrichment_keeps_reviewed_cells_when_detection_is_empty(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "raster-grid.pdf"

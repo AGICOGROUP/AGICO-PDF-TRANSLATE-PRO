@@ -794,7 +794,10 @@ def build_table_cell_render_plan(
             elif manual_parts is not None:
                 parts = manual_parts[line_index]
                 if parts is None:
-                    synthetic_cell = line_box
+                    # A single-cell continuation must share the cell flow with
+                    # its neighbors; a tight synthetic box would overprint it.
+                    synthetic_cell = (None if _smallest_containing_cell(page_info, line_box)
+                                      is not None else line_box)
                     items = [{
                         "text": target_line,
                         "left": line_box[0],
@@ -811,7 +814,15 @@ def build_table_cell_render_plan(
                     for item, part in zip(items, parts):
                         item["text"] = str(part)
             else:
-                items = pipeline.table_segment_targets(line, target_line, table_cells)
+                physical_cell = _smallest_containing_cell(page_info, line_box)
+                if (physical_cell is not None
+                        and physical_cell[2] - physical_cell[0] < 0.6 * page_info["width"]
+                        and line_box[0] >= physical_cell[0] - 2
+                        and line_box[2] <= physical_cell[2] + 2):
+                    items = [{"text": target_line, "left": line_box[0],
+                              "right": line_box[2]}]
+                else:
+                    items = pipeline.table_segment_targets(line, target_line, table_cells)
             if not items:
                 mapping_failed = True
                 break
@@ -832,9 +843,19 @@ def build_table_cell_render_plan(
                     mapping_failed = True
                     break
                 else:
+                    # Adjacent rows with the same cell edges establish this
+                    # table's column. Boundaries from unrelated page tables
+                    # must not split it into different boxes for short lines.
+                    local_column = any(
+                        abs(other["bbox"][0] - cell[0]) <= 1.5
+                        and abs(other["bbox"][2] - cell[2]) <= 1.5
+                        and (abs(other["bbox"][3] - cell[1]) <= 1.5
+                             or abs(other["bbox"][1] - cell[3]) <= 1.5)
+                        for other in table_cells
+                    )
                     left, right = (
                         (interval[0], interval[1])
-                        if interval is not None
+                        if interval is not None and not local_column
                         else (cell[0], cell[2])
                     )
                     cell_box = [left + 3, cell[1] + 2, right - 3, cell[3] - 2]

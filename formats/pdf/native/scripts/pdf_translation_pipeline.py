@@ -893,12 +893,26 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
             page_info["table_cells"] = table_cells
             page_info["image_boxes"] = page_image_boxes(page)
             raw_lines = page.extract_text_lines(strip=True, return_chars=True) or []
+            # Overlapping extraction boxes must not acquire the same glyph twice.
+            # Prefer the tightest containing block (typically a separate cell or
+            # continuation) over the broad multi-line block that overlaps it.
+            owners = {}
+            for char in page.chars:
+                if not visible_character(char):
+                    continue
+                candidates = [b for b in page_info["blocks"]
+                              if char_center_in_box(char, b["bbox"])]
+                if candidates:
+                    owner = min(candidates, key=lambda b:
+                                (b["bbox"][2] - b["bbox"][0]) *
+                                (b["bbox"][3] - b["bbox"][1]))
+                    owners[id(char)] = owner["id"]
             for block in page_info["blocks"]:
                 selected_raw = [
                     char
                     for char in page.chars
                     if visible_character(char)
-                    and char_center_in_box(char, block["bbox"])
+                    and owners.get(id(char)) == block["id"]
                 ]
                 characters = [character_record(char) for char in selected_raw]
                 block["characters"] = characters
@@ -909,7 +923,7 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
                         char
                         for char in raw_line.get("chars", [])
                         if visible_character(char)
-                        and char_center_in_box(char, block["bbox"])
+                        and owners.get(id(char)) == block["id"]
                     ]
                     if not selected:
                         continue

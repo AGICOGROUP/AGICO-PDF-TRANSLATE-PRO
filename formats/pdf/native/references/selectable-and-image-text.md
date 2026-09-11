@@ -81,8 +81,11 @@ Use these invariants:
 4. Use embedded-image boxes as exclusion geometry. A continuation slot that
    intersects most of an image is forbidden.
 5. Segment table text by physical cell, including extraction blocks that cross
-   several cells. Aggregate all fragments assigned to the same cell and render
-   that cell exactly once.
+   several cells. Assign overlapping source glyphs to one containing block;
+   do not suppress neighboring blocks to compensate for duplicate extraction.
+   Aggregate all fragments assigned to the same physical cell and render that
+   cell exactly once, including single-line manual continuations. Prefer local
+   cell edges over column boundaries from unrelated tables on the same page.
 6. Use exact font ascent, descent, spacing, and line count for vertical fitting.
    Ink-bounding-box height alone underestimates PDF line height and can cross a
    lower border.

@@ -113,7 +113,8 @@ translation and the coordinates where the translation should be placed:
 
 - `x`, `y` — top-left point where the translated text begins (in PDF points,
   origin top-left, y-down).
-- `fontsize` — override per-block; omit to use the default (6.8).
+- `fontsize` — set from the corresponding source text size using the placement
+  guidelines below; the script's 6.8pt fallback is not a document-wide size policy.
 - Optional fields: `max_width` (auto-wrap threshold), `align` (`left` |
   `center` | `right`), `color` (RGB 0–1 tuple).
 
@@ -163,11 +164,14 @@ Check each page for:
 
 Place target-language translations using these priorities, in order:
 
-1. **Right of the source span** — when there is horizontal whitespace to the
-   right of the original text. Use a slightly smaller font size (70–90% of
-   source) so the translation fits without crowding.
-2. **Below the source span** — when vertical whitespace exists in the same
-   cell or margin area. Use 60–80% of source size.
+1. **Immediately below or above the source** — for scattered labels, compare
+   the usable space on both sides; prefer below when both fit. Align with the
+   source's left edge or center, with a small gap (typically 2–4pt). Clear any
+   underline or leader without detaching the translation from its source.
+   Use the source block's bounds, not an unrelated empty area, as the anchor.
+2. **Immediately beside the source** — only when neither above nor below fits
+   readably without crossing text, dimensions, or artwork. For rotated labels,
+   evaluate proximity in their reading direction.
 3. **In an adjacent empty cell** — for tables with empty columns or rows.
 4. **Beside the source table** — when cells are full, inspect whitespace to
    the left and right of the whole table, then immediately above or below it.
@@ -188,9 +192,11 @@ images, or on vector graphics lines.
   SimSun (宋体) for body text that must match a serif source.
 - **Color**: Dark blue-gray `(0.15, 0.25, 0.55)` to visually distinguish
   translation from source black text without being intrusive.
-- **Size hierarchy**: Match source roles — title translations use the largest
-  size, body text smaller, table cell labels smallest. Keep one size per role
-  group per page.
+- **Size hierarchy**: Start at the corresponding source text's size; use 1–2pt
+  smaller when space requires it. Keep similar source roles/sizes consistent.
+  Do not automatically shrink translations to a percentage or the 5pt floor.
+  If space is tight, try the other nearby side or safe wrapping first; further
+  reduction is a local exception for readability and fit, with a 5pt floor.
 
 ## Acceptance gates
 
@@ -219,8 +225,9 @@ clearly labelled preview with located defects and unverified items. A largely
 untranslated or unreadable file is not a useful translation preview. Keep
 failed/unverified status; do not claim that a preview passed acceptance.
 
-- If a translation does not fit in available whitespace, reduce font size
-  (floor: 5pt) or shorten the translation wording before relocating.
+- If a translation does not fit, try the other nearby side, safe wrapping, or
+  concise equivalent wording before reducing below the source-relative size.
+  Preserve technical meaning; use the 5pt floor only as a last resort.
 - For crowded tables, try an adjacent grouped translation before margin notes;
   use the nearest readable unobstructed area and preserve clear source links.
 - Never delete or modify source content to make room for translations.
