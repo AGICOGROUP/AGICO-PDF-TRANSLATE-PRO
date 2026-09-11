@@ -7,8 +7,9 @@ explicitly requested monolingual replacement. The output is Chinese plus one
 other language. Explicit 单语 / 仅中文 follows replacement and skips this workflow.
 
 Before adding text, inventory both language sets. A drawing already containing
-Chinese and another language is complete only when every clear label is paired
-semantically in both directions and both unmatched counts are zero. In that
+the requested language pair is complete only when every clear label is paired
+semantically in both directions and both unmatched counts are zero. Existing
+Chinese-English pairs do not satisfy a Chinese-Spanish request. In the matching
 case return the exact source PDF with status `already_bilingual_complete`.
 Otherwise continue automatically and add only the missing target labels. Do
 not stop for clarification once processing has started.
@@ -18,6 +19,8 @@ Use this inventory contract:
 ```json
 {
   "document_kind": "engineering-drawing",
+  "language_pair": ["zh", "es"],
+  "requested_language_pair": ["zh", "es"],
   "clear_chinese_label_count": 12,
   "clear_foreign_label_count": 12,
   "matched_bilingual_pair_count": 12,

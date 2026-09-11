@@ -9,6 +9,7 @@ import json
 import time
 
 import pymupdf
+from cad_cache import LazyOCR, ocr_identity, page_fingerprint
 
 
 def overlap(a, b):
@@ -103,13 +104,17 @@ def extract_outline_records(document, job_dir, source_hash, native, engine=None,
     started = time.perf_counter()
     output, hits, misses = [], 0, 0
     scale, tile_pixels, overlap_pixels = dpi / 72, 1536, 128
+    identity, gamma = ocr_identity(), 2
+    engine = LazyOCR() if engine is None else engine
     step = (tile_pixels - overlap_pixels) / scale
     for page_index, page in enumerate(document):
+        page_identity = page_fingerprint(page)
         proposals = []
         for row in range(max(1, int((page.rect.height * scale - overlap_pixels - 1) // (tile_pixels - overlap_pixels)) + 1)):
             for col in range(max(1, int((page.rect.width * scale - overlap_pixels - 1) // (tile_pixels - overlap_pixels)) + 1)):
                 clip = pymupdf.Rect(col * step, row * step, col * step + tile_pixels / scale, row * step + tile_pixels / scale) & page.rect
-                key = hashlib.sha256(f'{source_hash}:ocr-v1:{page_index}:{dpi}:{list(clip)}'.encode()).hexdigest()
+                key = hashlib.sha256(json.dumps(['outline-ocr-v2', page_identity, identity,
+                                                dpi, list(clip), gamma]).encode()).hexdigest()
                 path = cache / f'{key}.json'
                 records = None
                 if path.exists():
@@ -123,17 +128,15 @@ def extract_outline_records(document, job_dir, source_hash, native, engine=None,
                     pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), clip=clip, alpha=False)
                     image = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
                     # Darken faint CAD strokes without blurring fine labels.
-                    image = image.point([round(255 * (v / 255) ** 2) for v in range(256)] * 3)
-                    if engine is None:
-                        from rapidocr_onnxruntime import RapidOCR
-                        engine = RapidOCR()
+                    image = image.point([round(255 * (v / 255) ** gamma) for v in range(256)] * 3)
                     result, _ = engine(np.asarray(image))
                     records = []
                     for corners, text, score in result or []:
                         xs, ys = zip(*corners)
+                        rendered_box = pymupdf.Rect((min(xs) + pix.x) / scale, (min(ys) + pix.y) / scale,
+                                                   (max(xs) + pix.x) / scale, (max(ys) + pix.y) / scale)
                         records.append({'source': text, 'confidence': float(score),
-                                        'bbox': [(min(xs) + pix.x) / scale, (min(ys) + pix.y) / scale,
-                                                 (max(xs) + pix.x) / scale, (max(ys) + pix.y) / scale]})
+                                        'bbox': list(rendered_box * page.derotation_matrix)})
                     temporary = path.with_suffix('.tmp')
                     temporary.write_text(json.dumps(records, ensure_ascii=False), encoding='utf-8')
                     temporary.replace(path)

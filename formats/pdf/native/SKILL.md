@@ -27,15 +27,17 @@ for manifests/coordinates, reset stages by hand, or substitute a one-off writer.
 Read [runner workflow](references/direct-v6-workflow.md) before execution:
 
 ```powershell
-python scripts/run_v6_job.py init <source.pdf> --jobs-root <jobs-root>
+python scripts/run_v6_job.py init <source.pdf> --jobs-root <jobs-root> --source-language <source-code> --target-language <target-code>
 python scripts/run_v6_job.py resume <job>
 ```
 
-Set the manifest's actual `source_language` and requested `target_language`
-before translation/building; do not retain legacy zh/en defaults for other
-language pairs. Translate the compact packet using the available capable model,
-merge by stable IDs and follow the runner's next action. Resume incomplete
-work, reusing valid extraction, translations, original images and clean bases.
+Supply the actual languages at init. Jobs bind the source and language request;
+changing languages selects an independent job. Use `--fresh` for a new test with
+no previous extraction, translations or reviews; it retains previous jobs and
+returns a new `job_dir`. Use that returned directory for subsequent commands.
+Do not change manifest languages to repurpose an existing job. Translate the
+compact packet using the available capable model, merge by stable IDs and follow
+the runner's next action. Resume the same job to reuse its valid artifacts.
 
 ## Translate and lay out native content
 

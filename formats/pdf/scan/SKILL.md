@@ -23,12 +23,13 @@ bilingual mode only when no explicit monolingual requirement was given. Explicit
 单语 / 仅中文 / replacement uses `replace`; never switch it to bilingual as a
 cleanup shortcut. Hidden OCR alone still reports `scan-only` in both classifiers.
 
-For `add_bilingual` only, inventory clear Chinese and foreign labels and run the PDF-level
-`scripts/decide_drawing_translation.py --inventory-file
-<drawing-language-inventory.json>`. If it returns
+For `add_bilingual` only, inventory clear Chinese and foreign labels with the
+actual `language_pair`, `requested_language_pair` and all five coverage counts
+defined in `../SKILL.md`. Run `../scripts/decide_drawing_translation.py --inventory-file
+<drawing-language-inventory.json> --route-report <job>/route-report.json`. If it returns
 `already_bilingual_complete`, preserve and deliver the exact source PDF and mark
-the task completed. Require Chinese plus one other language, complete semantic
-pairing, and zero unmatched clear labels. Partial bilingual drawings continue
+the task completed. Require the actual pair to match the requested languages,
+complete semantic pairing, and zero unmatched clear labels. Other drawings continue
 automatically with `add_bilingual`. Never pause for language confirmation after
 processing starts.
 
@@ -76,6 +77,9 @@ Use an isolated job directory named with the source SHA-256 prefix. Never modify
    do not install another machine-translation stack during a document job or
    substitute isolated phrase/pivot translations for contextual translation.
    Review technical terms, negation, numbers and units against source pixels.
+   For visually found OCR omissions, use the located-supplement procedure in
+   `references/workflow.md`; adding words to a translation alone does not repair
+   missing source IDs or replacement cleanup geometry.
 5. Select the output mode. For replacement, approve a tight `clean_box` around
    glyph pixels only, or `clean_boxes` for the individual glyph envelopes in a
    multi-line region. Never use the region union as a broad cleanup rectangle.
@@ -115,8 +119,19 @@ readable preview with actual defects if final acceptance is incomplete. Choose
 DPI for legibility. Never fabricate reviews, omit content or hide unreadability.
 
 Use one persistent OCR job directory and the builder's hash-validated lossless
-base cache. A wording-only correction reuses its base; cleanup/layout/source
-changes invalidate it. Rebuild through the official builder, re-render affected
+base and page-PDF caches. A wording-only correction reuses its base and rebuilds
+only that page; unchanged pages reuse their measured reports. Page keys bind
+source pixels, blocks, settings, implementation, dependencies and font content.
+Missing/corrupt entries rebuild. With no valid page caches, draw the whole
+document once with shared fonts/images, then split measured page caches without
+redrawing. Repairs render dirty pages and merge exact duplicate PDF resources;
+this keeps files compact but adds assembly time compared with undeduplicated
+page merging. `--no-page-cache` retains full-document drawing with the base cache
+for comparison or the smallest shared-resource output. Neither path proves
+faster end-to-end translation. The build report's
+`page_cache_hits`/`dirty_pages` show reuse; page `build_elapsed_seconds` and
+`clean_cache_hit` are historical when reused, while `elapsed_seconds` measures
+the current call. Rebuild through the official builder, re-render affected
 pages and review them, then run final checks against the exact assembled PDF.
 Do not repeat a whole-document render when unaffected page content is unchanged;
 reuse requires evidence of unchanged page content, not just matching page numbers.

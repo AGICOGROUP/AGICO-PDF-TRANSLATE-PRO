@@ -795,6 +795,31 @@ class ProtectedNativeTextTests(unittest.TestCase):
         self.assertLessEqual(box[0], 24)
         self.assertGreaterEqual(box[2], 570)
 
+    def test_running_header_starts_after_overlapping_left_logo(self):
+        item = block(
+            "p0001-b0001",
+            "Company heading",
+            "Translated company heading",
+            [111, 39, 497, 59],
+            size=19,
+            align=1,
+        )
+        item["role"] = "running-header"
+        page = {
+            "page": 1,
+            "width": 595.3,
+            "height": 841.9,
+            "table_cells": [],
+            "image_boxes": [[17, 31, 107, 113]],
+            "content_bounds": [24, 571.3],
+            "blocks": [item],
+        }
+
+        container = rebuild.resolve_text_container(page, item, item["lines"][0])
+
+        self.assertEqual(113, container[0])
+        self.assertGreaterEqual(container[2], 570)
+
     def test_narrow_text_immediately_above_a_table_uses_table_layout_not_body_flow(self):
         group = require(rebuild, "group_paragraph_flows")
         item = block(

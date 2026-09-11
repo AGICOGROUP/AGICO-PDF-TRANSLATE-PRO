@@ -16,7 +16,31 @@ python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json"
 
 ## 2. OCR inventory and translation
 
-Use cached single-scale OCR first. Retry only uncertain pages with --dual-scale or inspect uncertain crops at higher resolution. Visually compare the source render because OCR can split, merge, hallucinate, or miss text. Every clear source label belongs in the manifest, including text in diagrams, tables, photos, screenshots, seals, logos, headers, footers, and rotated regions.
+Use cached single-scale OCR first. Retry only uncertain regions/pages or inspect
+uncertain crops at higher resolution. Compare the existing source render with
+the inventory: OCR can split, merge, hallucinate, or miss text, including whole
+continuation lines. Include clear text in diagrams, tables, photos, screenshots,
+seals, logos, headers, footers, and rotated regions.
+
+When a missing line is visually confirmed, register its source text, stable new
+ID, page, rotation and tight glyph box in **source-render pixels**, and bind it
+to the appropriate translated block. For a missing continuation in an existing
+replacement block, use `scripts/register_source_supplements.py` and the payload
+in `manifest-schema.md`. It updates source IDs, full passage text and per-line
+cleanup together, leaving the target box and unrelated blocks unchanged:
+
+```powershell
+python scripts/register_source_supplements.py --manifest "job/manifest/translation-manifest.json" --supplements "job/manifest/source-supplements.json" --output "job/manifest/translation-manifest.json"
+```
+
+Supply the complete reviewed translation; if it already includes the missing
+line's meaning, keep it unchanged rather than translating that line twice.
+For an unrelated missing label/cell, create its own located source line and
+block using the normal manifest contract, not an unrelated paragraph owner.
+In additive mode register the label and its translation without source cleanup;
+the replacement-only helper deliberately rejects additive blocks. Keep these
+additions in the authoritative manifest instead of regenerating it from an old
+draft. A correction note or extra translated sentence is not a located supplement.
 
 Each completed page is saved atomically in `extract/page-checkpoints/` before
 the next OCR page begins. Resume with the same command/output directory; valid
@@ -119,7 +143,13 @@ SHA-256, and alt description in the build report.
 The builder samples only the original glyph-border pixels and caches lossless
 clean bases under `output/clean-bases/`. Cache validation includes source-render
 hash, cleanup boxes/colors, raster adjustments and builder implementation hash.
-Changing only wording or fonts reuses the base while rebuilding all target text.
+Changing only wording reuses the base and redraws target text on dirty pages;
+changing fonts invalidates the affected page caches. With no valid page caches,
+the builder draws one shared-resource document and splits its measured page
+caches without drawing again. Repair assembly merges exact duplicate PDF objects,
+including font data and glyph maps; it does not equate fonts by subset name.
+Resource deduplication reduces output size but adds assembly time. Use the existing
+`--no-page-cache` path for full drawing comparisons; it still reuses clean bases.
 Do not change cleanup boxes merely to obtain a cache hit. A failed build keeps
 the previous PDF intact; completed output replaces it atomically. The report
 records total/per-page elapsed time and base cache hits.
@@ -127,10 +157,15 @@ records total/per-page elapsed time and base cache hits.
 ## 5. Review and verify
 
 Review semantic accuracy on every selected page against the original page and
-final translation, including text missed by OCR. Save the adapter-owned
-`translation-review.json` as specified in the shared reference. Correct and
-re-review affected pages before delivery. This is part of the existing
-translation-integrity check; the selective visual review below concerns layout.
+rendered candidate, including text missed by OCR. In replacement mode, check both
+that the full meaning is translated and that the corresponding source wording
+is removed. Once a missed line is found, look for the same omission pattern in
+the other pages during this existing pass, not by restarting whole-file OCR.
+Save actual findings in `translation-review.json` as specified in the shared
+reference. Rebuild through the official builder and re-review affected pages;
+the helper's `pages_requiring_review` is a work list, not passing evidence.
+This is the existing translation-integrity review; selective high-zoom inspection
+below concerns layout.
 
 Render the final output once at the normal verification resolution. Run
 automatic checks across every page. Inspect at high zoom only changed regions,

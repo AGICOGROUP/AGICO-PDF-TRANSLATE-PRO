@@ -19,18 +19,19 @@
 ### 架构边界（改动前必读）
 
 - 根 `SKILL.md` 按文件格式路由：PDF → `formats/pdf/SKILL.md`（内容级路由）；静态 PNG/JPEG → `formats/image/SKILL.md`。
-- PDF 按内容分成 3 个互斥子适配器，同一输入只允许跑一个，禁止合并工作流：
+- PDF 内容分类仍为 native-text、mixed、scan-only；结合输出模式选择 4 个互斥执行适配器，同一输入只跑一个：
   - `formats/pdf/native/` — 可选文本/混合 PDF（保留可选中文字，单独处理图内文字）
   - `formats/pdf/scan/` — 纯扫描/图像 PDF
   - `formats/pdf/bilingual/` — 双语对照覆盖层
+  - `formats/pdf/native-cad/` — 原生/混合工程图的替换模式，保留矢量
 - 路由必须运行 `python formats/pdf/scripts/route_pdf_file.py <file>` 依内容判断，禁止按扩展名/文件名/用户措辞路由。
-- 工程图纸默认走双语覆盖；已是"中文+外语"完整的图纸直接保留原样并标记完成。
+- 用户指定目标单语走替换，明确双语走叠加；工程图仅在未指定模式时默认双语。直通要求现有语言组合与用户请求一致且语义覆盖完整，不是任意“中文+外语”都可跳过。
 - 每个适配器目录结构固定：`SKILL.md` + `scripts/` + `tests/` + `references/`。
 
 ### 常用命令
 
 - 安装依赖：`pip install -r formats/pdf/scan/scripts/requirements.txt`（numpy、Pillow、pdfplumber、pypdf、rapidocr-onnxruntime、reportlab）
-- 测试（pytest）：`python -m pytest formats/pdf/native/tests formats/pdf/scan/tests formats/pdf/bilingual/tests formats/image/tests formats/pdf/tests -q`；根目录另有 `test_independent_quality_gates.py`
+- 测试（pytest）：仓库根目录运行 `python -m pytest -q`；`pytest.ini` 包含四个 PDF 适配器、图片、路由和 `formats/test_independent_quality_gates.py`，并处理同名测试模块。
 - PDF 分类：`python formats/pdf/scripts/route_pdf_file.py <file>`（在仓库根目录运行）
 - SKILL.md 中出现的相对路径命令按对应适配器自己的目录解析。
 
@@ -38,7 +39,7 @@
 
 - `formats/pdf/*/scripts/sync-install.ps1`（部署脚本）目标路径硬编码为 `C:\Users\Administrator\.codex\skills\...`，在本机（用户 AGICO）会失败，使用前需改路径。
 - 本机直连 GitHub 会被重置，git 操作需走本地代理：`git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 fetch ...`。
-- 全局 Python 3.12 尚未安装 pytest，跑测试前先 `pip install pytest`。
+- 先检查当前解释器、依赖和字体；不要依据旧机器的 Python 版本假设安装状态。CAD 还需要 PyMuPDF。翻译过程中不升级依赖；重构对照固定解释器和依赖版本。
 
 ### 改敏感区域前先读的文档
 

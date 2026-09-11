@@ -6,6 +6,8 @@ import json
 import math
 import copy
 import time
+import platform
+from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +16,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+from pypdf import PdfReader, PdfWriter
 
 from contracts import TextOverflowError, fit_text, validate_manifest
 
@@ -452,14 +455,12 @@ def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
     return cleaned, clean_report, layout_report, False
 
 
-def build_pdf(manifest: dict, output_path: str | Path) -> dict:
+def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dict:
+    """Original full-document renderer, also used for each uncached page."""
     started = time.perf_counter()
     manifest = copy.deepcopy(manifest)
-    register_fonts(manifest.get("target_language", ""))
-    validate_manifest(manifest)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    clean_dir = output.parent / "clean-bases"
     clean_dir.mkdir(parents=True, exist_ok=True)
     page_index = {page["source_page"]: page for page in manifest["pages"]}
     blocks_by_page = {number: [block for block in manifest["blocks"] if block["page"] == number] for number in manifest["selected_pages"]}
@@ -517,7 +518,172 @@ def build_pdf(manifest: dict, output_path: str | Path) -> dict:
     report["output_sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
     report["rendered_block_count"] = len(report["rendered_blocks"])
     report["source_crop_run_count"] = len(report["source_crop_runs"])
-    output.with_suffix(".build-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
+
+
+def _json_hash(value: dict) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _page_build_identity() -> dict:
+    """Bind rendered pages to the implementation and actually registered fonts."""
+    scripts = Path(__file__).resolve().parent
+    fonts = {}
+    for name in (REGULAR_FONT, BOLD_FONT):
+        face = pdfmetrics.getFont(name).face
+        fonts[name] = {
+            "registered_sha256": hashlib.sha256(face._ttf_data).hexdigest(),
+            "file_sha256": hashlib.sha256(Path(face.filename).read_bytes()).hexdigest(),
+        }
+    return {
+        "implementation": {name: hashlib.sha256((scripts / name).read_bytes()).hexdigest()
+                           for name in ("build_scan.py", "contracts.py", "layout_adjustments.py")},
+        "dependencies": {name: version(name) for name in ("reportlab", "Pillow", "numpy", "pypdf")},
+        "python": platform.python_version(), "fonts": fonts,
+    }
+
+
+def _read_page_cache(pdf_path: Path, key: str) -> dict | None:
+    try:
+        cached = json.loads(pdf_path.with_suffix(".json").read_text(encoding="utf-8"))
+        payload = cached["payload"]
+        if cached["payload_sha256"] != _json_hash(payload) or payload["key"] != key:
+            return None
+        report = payload["report"]
+        if report["output_sha256"] != hashlib.sha256(pdf_path.read_bytes()).hexdigest():
+            return None
+        # Reports are measured output, never semantic or visual review evidence.
+        if len(report["pages"]) != 1 or len(PdfReader(pdf_path).pages) != 1:
+            return None
+        return report
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _save_page_cache(pdf_path: Path, key: str, report: dict) -> None:
+    payload = {"key": key, "report": report}
+    metadata = {"payload": payload, "payload_sha256": _json_hash(payload)}
+    temporary = pdf_path.with_suffix(".tmp.json")
+    temporary.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(pdf_path.with_suffix(".json"))
+
+
+def _seed_page_caches(pdf_path: Path, report: dict, entries: list) -> list[dict]:
+    """Split a single shared-resource render without drawing any page again."""
+    reports = []
+    block_offset = 0
+    with PdfReader(pdf_path) as reader:
+        for index, (number, _, key, page_pdf, _) in enumerate(entries):
+            started = time.perf_counter()
+            with PdfWriter() as writer:
+                writer.add_page(reader.pages[index])
+                temporary = page_pdf.with_suffix(".building.pdf")
+                writer.write(temporary)
+                temporary.replace(page_pdf)
+            row = report["pages"][index]
+            # The renderer emits page-contiguous blocks; IDs need not be unique
+            # across pages, so ID-based filtering would duplicate measurements.
+            block_end = block_offset + len(row["rendered_block_ids"])
+            blocks = report["rendered_blocks"][block_offset:block_end]
+            block_offset = block_end
+            crops = [crop for crop in report["source_crop_runs"] if crop["source_page"] == number]
+            page_report = {**report, "pages": [row], "rendered_blocks": blocks,
+                "source_crop_runs": crops, "rendered_block_count": len(blocks),
+                "source_crop_run_count": len(crops),
+                "mixed_color_block_count": sum(bool(block.get("mixed_color")) for block in blocks),
+                "changed_pixel_count": row["changed_pixel_count"] + row["layout_changed_pixel_count"],
+                "outside_approved_pixel_changes": row["outside_approved_pixel_changes"] + row["layout_outside_approved_pixel_changes"],
+                "elapsed_seconds": row["elapsed_seconds"] + time.perf_counter() - started,
+                "output": str(page_pdf),
+                "output_sha256": hashlib.sha256(page_pdf.read_bytes()).hexdigest()}
+            _save_page_cache(page_pdf, key, page_report)
+            reports.append(page_report)
+    return reports
+
+
+def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool = True) -> dict:
+    started = time.perf_counter()
+    manifest = copy.deepcopy(manifest)
+    register_fonts(manifest.get("target_language", ""))
+    validate_manifest(manifest)
+    output = Path(output_path).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    clean_dir = output.parent / "clean-bases"
+    temporary_output = output.with_suffix(".building.pdf")
+    if not use_page_cache:
+        # Keep the original full-document drawing path available for comparisons.
+        report = _render_pdf(manifest, temporary_output, clean_dir)
+        report.update(page_cache_hits=[], dirty_pages=list(manifest["selected_pages"]))
+    else:
+        cache_dir = output.parent / "page-build-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        identity = _page_build_identity()
+        page_index = {page["source_page"]: page for page in manifest["pages"]}
+        entries = []
+        for page_number in manifest["selected_pages"]:
+            page = page_index[page_number]
+            source_hash = hashlib.sha256(Path(page["render_path"]).read_bytes()).hexdigest()
+            if page.get("render_sha256") and source_hash != page["render_sha256"].lower():
+                raise ValueError(f"source render hash mismatch on page {page_number}")
+            page_manifest = {**manifest, "selected_pages": [page_number], "pages": [page],
+                "blocks": [block for block in manifest["blocks"] if block["page"] == page_number],
+                "source_lines": [line for line in manifest["source_lines"] if line["page"] == page_number]}
+            key = _json_hash({"source_render": source_hash, "page": page,
+                "blocks": page_manifest["blocks"], "source_lines": page_manifest["source_lines"],
+                "target_language": manifest.get("target_language", ""), "runtime": identity})
+            page_pdf = cache_dir / f"page-{page_number:04d}.pdf"
+            entries.append((page_number, page_manifest, key, page_pdf, _read_page_cache(page_pdf, key)))
+        cold = not any(entry[4] is not None for entry in entries)
+        if cold:
+            # The first candidate keeps ReportLab's shared resources and avoids
+            # eight separate font-subsetting/rendering passes for eight pages.
+            report = _render_pdf(manifest, temporary_output, clean_dir)
+            seeded = _seed_page_caches(temporary_output, report, entries)
+            entries = [(n, m, k, p, r) for (n, m, k, p, _), r in zip(entries, seeded)]
+        report = {"builder": OFFICIAL_BUILDER, "pages": [], "rendered_blocks": [],
+                  "source_crop_runs": [], "outside_approved_pixel_changes": 0,
+                  "changed_pixel_count": 0, "mixed_color_block_count": 0,
+                  "page_cache_hits": [], "dirty_pages": []}
+        with PdfWriter() as writer:
+            for page_number, page_manifest, key, page_pdf, page_report in entries:
+                page_started = time.perf_counter()
+                hit = not cold and page_report is not None
+                if page_report is None:
+                    page_report = _render_pdf(page_manifest, page_pdf, clean_dir)
+                    _save_page_cache(page_pdf, key, page_report)
+                if not cold:
+                    writer.append(str(page_pdf))
+                page_row = page_report["pages"][0]
+                report["pages"].append({**page_row, "page_pdf_path": str(page_pdf),
+                    "page_pdf_sha256": page_report["output_sha256"], "page_cache_key": key,
+                    "page_cache_hit": hit, "build_elapsed_seconds": page_row["elapsed_seconds"],
+                    "elapsed_seconds": round(time.perf_counter() - page_started
+                                             + (page_report["elapsed_seconds"] if cold else 0), 3)})
+                report["page_cache_hits" if hit else "dirty_pages"].append(page_number)
+                for field in ("rendered_blocks", "source_crop_runs"):
+                    report[field].extend(page_report[field])
+                for field in ("outside_approved_pixel_changes", "changed_pixel_count", "mixed_color_block_count"):
+                    report[field] += page_report[field]
+                if hit:
+                    print(json.dumps({"stage": "build", "page": page_number,
+                        "seconds": report["pages"][-1]["elapsed_seconds"], "page_cache_hit": True}), flush=True)
+            if not cold:
+                # Built-in structural deduplication checks actual object contents,
+                # including font glyph maps; equal subset names alone are unsafe.
+                writer.compress_identical_objects()
+                writer.write(temporary_output)
+    report.update(source_sha256=str(manifest.get("source_sha256", "")),
+                  manifest_sha256=_json_hash(manifest), output=str(output),
+                  output_sha256=hashlib.sha256(temporary_output.read_bytes()).hexdigest(),
+                  rendered_block_count=len(report["rendered_blocks"]),
+                  source_crop_run_count=len(report["source_crop_runs"]),
+                  elapsed_seconds=round(time.perf_counter() - started, 3))
+    temporary_report = output.with_suffix(".build-report.tmp.json")
+    temporary_report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_report.replace(output.with_suffix(".build-report.json"))
+    # Publish the PDF last: even a report-write failure retains the previous PDF.
+    temporary_output.replace(output)
     return report
 
 
@@ -525,8 +691,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build a scan-PDF translation from an approved manifest")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--no-page-cache", action="store_true", help="Force original full-document rendering")
     args = parser.parse_args()
-    report = build_pdf(json.loads(Path(args.manifest).read_text(encoding="utf-8")), args.output)
+    report = build_pdf(json.loads(Path(args.manifest).read_text(encoding="utf-8")), args.output,
+                       use_page_cache=not args.no_page_cache)
     print(json.dumps({"output": report["output"], "rendered_block_count": report["rendered_block_count"], "outside_approved_pixel_changes": report["outside_approved_pixel_changes"]}, ensure_ascii=False))
 
 

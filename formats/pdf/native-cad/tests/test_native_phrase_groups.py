@@ -56,3 +56,60 @@ def test_normal_font_and_outline_height_do_not_inflate_baseline():
     for kind in ('native', 'outline'):
         record = dict(id='a', page=0, font_size=10, bbox=[0,0,100,18], kind=kind)
         assert cad.typography_baselines([record], {'a': {'role': 'body'}})[(0,'body')] == 10
+
+
+@pytest.mark.parametrize('box', [
+    [500, 300, 700, 350], [30, 35, 500, 60], [30, 35, 30, 60],
+    [200, 60, 30, 35], [30, 35, float('nan'), 60], [30, 35, float('inf'), 60],
+])
+def test_invalid_native_layout_does_not_erase_source(tmp_path, box):
+    source = tmp_path / 'source.pdf'
+    with pymupdf.open() as doc:
+        doc.new_page(width=400, height=200).insert_text((30, 50), 'VIEW')
+        doc.save(source)
+    original = source.read_bytes()
+    job = tmp_path / 'job'
+    assert cad.prepare(source, job, ocr='never') == 0
+    packet = cad.read_json(job / cad.PACKET_NAME)
+    record = packet['records'][0]
+    record.update(status='translated', translation='视图', layout_box=box)
+    cad.write_json(job / cad.PACKET_NAME, packet)
+    assert cad.apply(job, job / cad.PACKET_NAME, cad.DEFAULT_FONT) != 0
+    report = cad.read_json(job / cad.APPLY_REPORT_NAME)
+    assert report['passed'] is False
+    assert record['id'] in [r['id'] for r in report['invalid_layout_regions']]
+    assert not (job / cad.OUTPUT_NAME).exists()
+    assert (job / cad.SOURCE_NAME).read_bytes() == original == source.read_bytes()
+
+
+@pytest.mark.parametrize('rotation', [90, 180, 270])
+@pytest.mark.parametrize('off_page', [False, True])
+@pytest.mark.parametrize('cropped', [False, True])
+def test_native_layout_uses_unrotated_visible_bounds(tmp_path, rotation, off_page, cropped):
+    source = tmp_path / 'rotated.pdf'
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=400, height=200)
+        page.insert_text((280, 50), 'VIEW')
+        if cropped:
+            page.set_cropbox(pymupdf.Rect(20, 10, 380, 190))
+        page.set_rotation(rotation)
+        doc.save(source)
+    original = source.read_bytes()
+    job = tmp_path / 'job'
+    assert cad.prepare(source, job, ocr='never') == 0
+    packet = cad.read_json(job / cad.PACKET_NAME)
+    packet['records'][0].update(status='translated', translation='视图')
+    if off_page:
+        packet['records'][0]['layout_box'] = [30, 250, 120, 280]
+    cad.write_json(job / cad.PACKET_NAME, packet)
+    result = cad.apply(job, job / cad.PACKET_NAME, cad.DEFAULT_FONT)
+    if off_page:
+        assert result != 0
+        assert not (job / cad.OUTPUT_NAME).exists()
+    else:
+        assert result == 0
+        with pymupdf.open(job / cad.OUTPUT_NAME) as doc:
+            assert doc[0].rotation == rotation
+            assert '视图' in doc[0].get_text()
+            assert 'VIEW' not in doc[0].get_text()
+    assert source.read_bytes() == original

@@ -13,6 +13,25 @@ DECIDER = ROOT / "formats" / "pdf" / "scripts" / "decide_drawing_translation.py"
 
 
 class DrawingTranslationModeTests(unittest.TestCase):
+    def test_complete_bilingual_requires_requested_languages_and_all_counts(self):
+        complete = {
+            'document_kind': 'engineering-drawing',
+            'translation_mode': 'add_bilingual',
+            'language_pair': ['zh', 'en'], 'requested_language_pair': ['zh', 'es'],
+            'clear_chinese_label_count': 4, 'clear_foreign_label_count': 4,
+            'matched_bilingual_pair_count': 4,
+            'unmatched_chinese_label_count': 0, 'unmatched_foreign_label_count': 0,
+        }
+        for patch in ({}, {'language_pair': None}, {'requested_language_pair': None}):
+            with self.subTest(patch=patch):
+                self.assertEqual('add_bilingual', self.decide({**complete, **patch})['action'])
+        complete['requested_language_pair'] = ['en', 'zh']
+        for field in ('language_pair', 'requested_language_pair', 'unmatched_chinese_label_count'):
+            with self.subTest(missing=field):
+                payload = {key: value for key, value in complete.items() if key != field}
+                self.assertEqual('add_bilingual', self.decide(payload)['action'])
+        self.assertEqual('skip_translation', self.decide(complete)['action'])
+
     def test_saved_route_overrides_missing_or_wrong_inventory_kind_and_mode(self):
         # Complete bilingual counts must never skip an explicit replacement.
         for kind in (None, "document"):
@@ -52,6 +71,8 @@ class DrawingTranslationModeTests(unittest.TestCase):
     def test_complete_chinese_foreign_bilingual_drawing_is_skipped(self):
         decision = self.decide({
             "document_kind": "engineering-drawing",
+            "language_pair": ["zh-CN", "es"],
+            "requested_language_pair": ["es", "ZH_cn"],
             "clear_chinese_label_count": 4,
             "clear_foreign_label_count": 4,
             "matched_bilingual_pair_count": 4,
@@ -91,6 +112,8 @@ class DrawingTranslationModeTests(unittest.TestCase):
     def test_inventory_file_supports_path_safe_automation(self):
         payload = {
             "document_kind": "engineering-drawing",
+            "language_pair": ["zh", "en"],
+            "requested_language_pair": ["zh", "en"],
             "clear_chinese_label_count": 2,
             "clear_foreign_label_count": 2,
             "matched_bilingual_pair_count": 2,

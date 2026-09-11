@@ -14,10 +14,13 @@ import sys
 import time
 from statistics import median
 from typing import Any
+from uuid import uuid4
 
 import pymupdf
 from cad_outline import extract_outline_records, cover_conflicts, drawing_index
 from cad_batch import cell_proposals, merge_supplement, page_ocr, review_bundle
+from cad_cache import LazyOCR
+from cad_units import propose_units, merge_unit_translations
 
 
 SOURCE_NAME = "SOURCE.pdf"
@@ -112,15 +115,33 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
     return records
 
 
-def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
+def prepare(source: Path, job_dir: Path, ocr: str = 'auto', *,
+            target_language: str | None = None, fresh: bool = False) -> int:
     if not source.is_file():
         print("source file not found", file=sys.stderr)
         return 2
+    if fresh:
+        job_dir = job_dir.with_name(job_dir.name + '-fresh-' + uuid4().hex[:12])
     job_dir.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     source_hash = sha256(source)
     old_packet = read_json(job_dir / PACKET_NAME) if (job_dir / PACKET_NAME).exists() else {}
     old_inventory = read_json(job_dir / INVENTORY_NAME) if (job_dir / INVENTORY_NAME).exists() else {}
+    request = old_inventory.get('request', old_packet.get('request'))
+    if target_language is not None:
+        language = target_language.strip().replace('_', '-').casefold()
+        if not language:
+            print('target language must be nonempty', file=sys.stderr)
+            return 2
+        request = {'target_language': language, 'translation_mode': 'replace', 'pages': 'all'}
+    if any(old.get('request') is not None and old.get('request') != request
+           for old in (old_inventory, old_packet)):
+        print('job target language differs; use --fresh or a new job directory', file=sys.stderr)
+        return 2
+    if (request is not None and old_packet and old_packet.get('request') is None
+            and any(r.get('status') != 'pending' or r.get('translation') for r in old_packet.get('records', []))):
+        print('legacy translations have no target binding; use --fresh or resume without rebinding', file=sys.stderr)
+        return 2
     if any(old and old.get('source_sha256') != source_hash for old in (old_packet, old_inventory)):
         print('job belongs to another source; use a different job directory', file=sys.stderr)
         return 2
@@ -138,6 +159,7 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
         return 2
     inventory = {
         "schema_version": 1,
+        **({'request': request} if request is not None else {}),
         "source_sha256": sha256(bound_source),
         "page_count": document.page_count,
         "pages": [page_snapshot(page) for page in document],
@@ -146,8 +168,7 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
     needs_ocr = ocr == 'always' or (ocr == 'auto' and any(p['vector_count'] > 100 or p['image_count'] for p in inventory['pages']))
     if needs_ocr:
         try:
-            from rapidocr_onnxruntime import RapidOCR
-            engine = RapidOCR()
+            engine = LazyOCR()
             outlines, timing = extract_outline_records(document, job_dir, source_hash, inventory['records'], engine=engine)
             supplement_started = time.perf_counter()
             supplement_count, supplement_hits = 0, 0
@@ -176,10 +197,12 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
     placement = {}
     for page_index, page in enumerate(document):
         placement.update(cell_proposals(page, [r for r in inventory['records'] if r['page'] == page_index]))
+    inventory['placements'] = placement
     document.close()
     previous = {r['id']: r for r in old_packet.get('records', [])}
     packet = {
         "schema_version": 1,
+        **({'request': request} if request is not None else {}),
         "source_sha256": inventory["source_sha256"],
         "records": [
             {
@@ -209,10 +232,28 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto') -> int:
     inventory['prepare_seconds'] = round(time.perf_counter() - started, 3)
     write_json(job_dir / INVENTORY_NAME, inventory)
     write_json(job_dir / PACKET_NAME, packet)
+    write_json(job_dir / 'translation-units.json', propose_units(inventory))
     source_review = review_bundle(bound_source, job_dir/'source-review', packet['records'])
     write_json(job_dir / 'prepare-report.json', {'passed': True, 'seconds': round(time.perf_counter()-started,3), 'ocr': inventory.get('ocr'), 'records': len(inventory['records']), 'cell_proposals': len(placement), 'source_review_seconds': source_review['seconds']})
     print(json.dumps({"stage": "prepared", "job_dir": str(job_dir)}, ensure_ascii=False))
     return 0
+
+
+def merge_units(job_dir: Path, translations: Path) -> int:
+    try:
+        inventory = read_json(job_dir / INVENTORY_NAME)
+        if sha256(job_dir / SOURCE_NAME) != inventory['source_sha256']:
+            raise ValueError('source hash mismatch')
+        packet = read_json(job_dir / PACKET_NAME)
+        if packet.get('source_sha256') != inventory['source_sha256'] or packet.get('request') != inventory.get('request'):
+            raise ValueError('packet source/request mismatch')
+        merged, count = merge_unit_translations(inventory, packet, read_json(translations))
+        write_json(job_dir / PACKET_NAME, merged)
+        print(json.dumps({'stage': 'units_merged', 'units': count, 'packet': str(job_dir / PACKET_NAME)}))
+        return 0
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
 
 def validate_packet(
@@ -384,6 +425,8 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         failures.append("source_hash_mismatch")
     if packet.get("source_sha256") != inventory.get("source_sha256"):
         failures.append("packet_source_hash_mismatch")
+    if inventory.get('request') is not None and packet.get('request') != inventory['request']:
+        failures.append('packet_request_mismatch')
     supplied, incomplete = validate_packet(inventory, packet)
     if incomplete:
         failures.append("incomplete_translations")
@@ -399,6 +442,37 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                 "fit_failures": [],
             },
         )
+        return 2
+
+    # A box that fits text may still be outside the visible page. Validate
+    # native and outline placements before fitting or erasing any source text.
+    invalid_layouts = []
+    with pymupdf.open(bound_source) as source_document:
+        for record in inventory['records']:
+            translated = supplied.get(str(record['id']), {})
+            if translated.get('status') != 'translated':
+                continue
+            box = translated.get('layout_box', record['bbox'])
+            reason = None
+            try:
+                if (not isinstance(box, (list, tuple)) or len(box) != 4
+                        or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                               or not math.isfinite(v) for v in box)
+                        or box[2] <= box[0] or box[3] <= box[1]):
+                    reason = 'invalid_layout_box'
+                else:
+                    page = source_document[int(record['page'])]
+                    # Text extraction and insertion use unrotated coordinates,
+                    # whereas page.rect reflects /Rotate and the visible CropBox.
+                    if not (page.rect * page.derotation_matrix).contains(pymupdf.Rect(box)):
+                        reason = 'layout_outside_page'
+            except (ValueError, TypeError, IndexError, OverflowError):
+                reason = 'invalid_layout_box'
+            if reason:
+                invalid_layouts.append({'id': record['id'], 'reason': reason})
+    if invalid_layouts:
+        write_json(report_path, {'passed': False, 'failures': ['invalid_layout_regions'],
+                                'invalid_layout_regions': invalid_layouts, 'fit_failures': []})
         return 2
 
     # Check each distinct output character once, before covering any source text.
@@ -463,7 +537,8 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                 for other in inventory['records']:
                     if other['page'] == page_index and other['id'] != record['id'] and other.get('kind') != 'outline' and pymupdf.Rect(box).intersects(pymupdf.Rect(other['bbox'])):
                         reasons.append(f'other_native_text:{other["id"]}')
-            if not document[page_index].rect.contains(pymupdf.Rect(layout_box)):
+            page = document[page_index]
+            if not (page.rect * page.derotation_matrix).contains(pymupdf.Rect(layout_box)):
                 reasons.append('layout_outside_page')
             if not pymupdf.Rect(layout_box).intersects(pymupdf.Rect(record['bbox'])):
                 reasons.append('layout_not_adjacent_to_source')
@@ -695,7 +770,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("source", type=Path)
     prepare_parser.add_argument("--job-dir", required=True, type=Path)
+    prepare_parser.add_argument('--target-language', help='Bind a new job to the requested target language')
+    prepare_parser.add_argument('--fresh', action='store_true', help='Create an independent sibling job; return its path')
     prepare_parser.add_argument('--ocr', choices=('auto', 'always'), default='auto', help='auto detects vector-rich/image pages; always also scans sparse outline drawings')
+    units_parser = subparsers.add_parser('merge-units', help='Import reviewed phrase translations into the original packet')
+    units_parser.add_argument('job_dir', type=Path)
+    units_parser.add_argument('--translations', required=True, type=Path)
     apply_parser = subparsers.add_parser("apply")
     apply_parser.add_argument("job_dir", type=Path)
     apply_parser.add_argument("--packet", required=True, type=Path)
@@ -717,9 +797,12 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     args = build_parser().parse_args()
     if args.command == "prepare":
-        return prepare(args.source, args.job_dir, args.ocr)
+        return prepare(args.source, args.job_dir, args.ocr,
+                       target_language=args.target_language, fresh=args.fresh)
     if args.command == "apply":
         return apply(args.job_dir, args.packet, args.font_file)
+    if args.command == 'merge-units':
+        return merge_units(args.job_dir, args.translations)
     if args.command == 'review':
         packet = read_json(args.job_dir / PACKET_NAME)
         bound_source = args.job_dir / SOURCE_NAME

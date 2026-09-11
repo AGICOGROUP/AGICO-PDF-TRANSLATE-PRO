@@ -18,6 +18,13 @@ COUNT_FIELDS = (
 )
 
 
+def language_pair(value: object) -> frozenset[str]:
+    if not isinstance(value, list) or len(value) != 2 or not all(isinstance(v, str) for v in value):
+        return frozenset()
+    pair = frozenset(v.strip().replace('_', '-').casefold() for v in value)
+    return pair if len(pair) == 2 and '' not in pair else frozenset()
+
+
 def decide(inventory: dict[str, object], route_report: dict | None = None) -> dict[str, object]:
     context = route_report if route_report is not None else inventory
     if context.get("error"):
@@ -43,8 +50,14 @@ def decide(inventory: dict[str, object], route_report: dict | None = None) -> di
     chinese = counts["clear_chinese_label_count"]
     foreign = counts["clear_foreign_label_count"]
     matched = counts["matched_bilingual_pair_count"]
+    present_pair = language_pair(inventory.get('language_pair'))
+    requested_pair = language_pair(context.get('requested_language_pair',
+                                              inventory.get('requested_language_pair')))
     complete = (
         kind == "engineering-drawing"
+        and bool(present_pair)
+        and present_pair == requested_pair
+        and all(field in inventory for field in COUNT_FIELDS)
         and chinese > 0
         and foreign > 0
         and matched == chinese == foreign

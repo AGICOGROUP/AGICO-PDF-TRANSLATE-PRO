@@ -69,15 +69,34 @@ def _artifact(job: dict[str, Any], name: str) -> Path:
     return Path(record["path"])
 
 
+def _language_identity(value: str) -> str:
+    return str(value).strip().replace('_', '-').casefold()
+
+
+def _validate_manifest_language(job: dict, manifest: dict) -> None:
+    request = job.get('request')
+    if request is not None and any(
+        _language_identity(manifest.get(key, '')) != request[key]
+        for key in ('source_language', 'target_language')
+    ):
+        raise ValueError('manifest language differs from the job request; initialize a new language job')
+
+
 def init_job(
     source: Path,
     jobs_root: Path,
     source_language: str = "zh",
     target_language: str = "en",
+    *, fresh: bool = False,
 ) -> Path:
     if not any(native_char_count(page) for page in PdfReader(source).pages):
         raise ValueError('scan-only PDF (possibly hidden OCR); use translate-scan-pdf-professionally')
-    job_dir = state.create_job(source, jobs_root)
+    request = {'source_language': _language_identity(source_language),
+               'target_language': _language_identity(target_language),
+               'translation_mode': 'replace', 'pages': 'all'}
+    if not request['source_language'] or not request['target_language']:
+        raise ValueError('source and target language must be nonempty')
+    job_dir = state.create_job(source, jobs_root, request=request, fresh=fresh)
     job = state.load_job(job_dir)
     manifest = job_dir / "manifest.json"
     if not manifest.exists():
@@ -94,6 +113,7 @@ def init_job(
             target_language,
         )
     manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    _validate_manifest_language(job, manifest_data)
     if not any(page.get("blocks") for page in manifest_data.get("pages", [])):
         raise ValueError(
             "scan-only PDF detected; use translate-scan-pdf-professionally"
@@ -294,6 +314,7 @@ def build_native(job_dir: Path) -> None:
         raise ValueError("build-native requires initialized stage")
     manifest = _artifact(job, "manifest")
     manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    _validate_manifest_language(job, manifest_data)
     if manifest_data.get("source_sha256") != job["source"]["sha256"]:
         raise ValueError("manifest source hash mismatch")
     state.bind_artifact(job_dir, "manifest", manifest)
@@ -534,6 +555,8 @@ def main() -> None:
     init_parser.add_argument("--jobs-root", type=Path, required=True)
     init_parser.add_argument("--source-language", default="zh")
     init_parser.add_argument("--target-language", default="en")
+    init_parser.add_argument('--fresh', action='store_true',
+                             help='Create independent job state; retain all previous jobs')
     for command in ("status", "resume", "build-native", "build-images", "assemble"):
         child = commands.add_parser(command)
         child.add_argument("job", type=Path)
@@ -553,6 +576,7 @@ def main() -> None:
                 args.jobs_root,
                 args.source_language,
                 args.target_language,
+                fresh=args.fresh,
             )
             print(json.dumps({"job_dir": str(job_dir)}))
         elif args.command == "status":

@@ -12,7 +12,13 @@ completed delivery. A warning is not permission to omit or summarize text.
 Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
 reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,
 clipping_failures, unreadable_text_failures and untranslated_clear_labels.
-Only record observed findings; a missing check is not a zero result.
+Populate these fields from the reviewed candidate, not a template that defaults
+to `true`, empty failure lists or `untranslated_clear_labels: 0`. Before inspection,
+leave evidence unverified; a translation model's review of text alone is not a
+review of the rendered PDF. Inventory coverage counts only registered source
+IDs: zero unassigned/missing blocks does not prove OCR found every visible line.
+For replacement output, a clear source-language sentence remaining beside its
+translation is still a cleanup defect; register its geometry and repair locally.
 Treat automatic overlap results as candidates for the existing anomaly review,
 not as visually confirmed defects. Inspect each flagged word pair in a local
 render with enough surrounding context to judge readability and field alignment.
@@ -31,8 +37,10 @@ reuse unchanged-page evidence with content identity.
 verify_scan.py also reads translation-review.json beside the visual review
 (or --translation-review). Review every page against the original, including
 OCR omissions. Keep current hashes, reviewed source IDs, actual context and
-unresolved findings. Never generate passing entries from counts or merely
-rebind old hashes. Automated validation cannot establish semantic accuracy.
+unresolved findings. After rebuilding, inspect affected candidate pages before
+updating their evidence and final candidate hash; retain unchanged-page evidence
+only with content identity. Do not turn old translation notes into a new visual
+pass by rebinding hashes. Automated validation cannot establish semantic accuracy.
 
 At 120 seconds per selected page stop repair loops. Completed output requires
 passed verification. Otherwise provide a clearly named preview with its real

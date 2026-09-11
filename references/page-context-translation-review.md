@@ -82,7 +82,11 @@ Example structure (replace examples with actual reviewed evidence):
 
 Corrections record source IDs or source location, original OCR when relevant,
 old translation, corrected translation, and the source-based reason. Missing
-OCR labels receive IDs before the manifest is finalized. Record actual review
+OCR labels enter the adapter's source inventory with IDs, located glyph geometry
+and translation ownership before the manifest is finalized. In replacement mode
+include their source cleanup; in additive mode preserve their source pixels.
+Adding meaning to a neighboring translation without this mapping leaves the
+original omission unresolved. Record actual review
 only: do not prefill every page as passed from block counts, successful builds,
 OCR confidence, or a visual-review boolean. Verify page coverage, current hashes,
 and absence of unresolved findings before declaring completion.

@@ -316,6 +316,16 @@ def resolve_text_container(
         left, right = max(content_left, line_box[0]), content_right
 
     line_top, line_bottom = line_box[1], line_box[3]
+    if role == "running-header":
+        vertical_mid = (line_top + line_bottom) / 2
+        for raw_image in page_info.get("image_boxes", []):
+            image = [float(value) for value in raw_image]
+            if (
+                image[1] - 2 <= vertical_mid <= image[3] + 2
+                and image[2] <= line_box[0] + 10
+                and image[2] < width * 0.5
+            ):
+                left = max(left, image[2] + 6)
     if role.startswith("heading-"):
         for raw_image in page_info.get("image_boxes", []):
             image = [float(value) for value in raw_image]

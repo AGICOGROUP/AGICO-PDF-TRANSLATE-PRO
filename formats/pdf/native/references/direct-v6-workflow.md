@@ -6,7 +6,7 @@ artifact under a source-hash-bound job directory.
 ## Commands
 
 ```powershell
-python scripts/run_v6_job.py init <source.pdf> --jobs-root tmp/pdfs
+python scripts/run_v6_job.py init <source.pdf> --jobs-root tmp/pdfs --source-language <source-code> --target-language <target-code>
 python scripts/run_v6_job.py status <job>
 python scripts/run_v6_job.py resume <job>
 python scripts/run_v6_job.py build-native <job>
@@ -17,6 +17,12 @@ python scripts/run_v6_job.py assemble <job>
 python scripts/run_v6_job.py verify <job> `
   --visual-review-report <job>/visual-review.json
 ```
+
+`init` returns the authoritative `job_dir`, binding the source and normalized
+language pair in replacement mode for all source pages. The same request resumes
+its job; a different language pair selects another job. `--fresh` starts an
+independent test without reusing old artifacts and leaves old jobs intact.
+Legacy source-only jobs can still be resumed by their explicit path.
 
 `resume` reports the next internal action. Exit code 2 means Codex must perform
 that action; it is not a request for a user-supplied intermediate.

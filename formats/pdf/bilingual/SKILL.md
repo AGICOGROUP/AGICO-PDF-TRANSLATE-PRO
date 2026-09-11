@@ -31,16 +31,18 @@ Explicit “加上中文/英文/其他语言”, “添加翻译”, “做成/�
 This takes precedence even when the same request says “翻译为英文/中文”.
 Respect negation; “不要双语版” does not request bilingual output.
 
-Before translation, inventory every clear Chinese and foreign label and run
+Before translation, inventory every clear Chinese and foreign label, including
+the actual `language_pair`, `requested_language_pair` and all five coverage
+counts defined in `../SKILL.md`. Run
 `python ../scripts/decide_drawing_translation.py --inventory-file
 <drawing-language-inventory.json> --route-report <job>/route-report.json`.
 Use the router's document kind and mode, not a guessed inventory classification.
 If the authoritative route says `replace`, select its replacement adapter before
 building an output. When the coverage decision returns
 `already_bilingual_complete`, preserve and deliver the exact source PDF as an
-already-completed bilingual drawing. Do not translate, rebuild, or add another
-language. Continue automatically for every other decision; do not pause after
-the workflow starts.
+already-completed bilingual drawing in the requested languages. Different or
+unknown language pairs continue inventory/translation even if the source already
+contains two languages. Continue automatically for every other decision.
 
 ## When to use this skill vs. the native/scan adapters
 
@@ -50,7 +52,7 @@ the workflow starts.
 | Replace source text in a native/mixed engineering drawing | `formats/pdf/native-cad/SKILL.md` |
 | Keep source text, add translation beside it | **this skill** |
 | Engineering drawing, output mode and target language unspecified | **this skill** |
-| Complete Chinese + one-foreign-language drawing | Preserve source; mark complete |
+| Complete drawing in the requested bilingual pair | Preserve source; mark complete |
 
 Never run this skill and a replacement adapter on the same output. The two
 goals are mutually exclusive: replacement adapters remove source text

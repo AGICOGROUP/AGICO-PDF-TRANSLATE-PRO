@@ -12,15 +12,19 @@ PDF; renders serve OCR/review only. Do not run a second adapter.
 ## Prepare once
 
 ```powershell
-python scripts/native_cad_pipeline.py prepare <source.pdf> --job-dir <job>
+python scripts/native_cad_pipeline.py prepare <source.pdf> --job-dir <job> --target-language <target-code>
 ```
 
 Prepare extracts native text, runs cached tiles and a full-page supplement,
 deduplicates missing regions, proposes closed CAD cells and creates
 source-review/index.html with the whole sheet and label crops. Supplement IDs
 use -u; tile IDs stay unchanged. Use --ocr always for sparse outlined drawings.
-Reuse the current job on retries. When the user requests a fresh start, create
-an empty job and import no previous translation or OCR artifacts.
+Reuse the current job on retries with the same target language. For a fresh test
+or a different target, use `--fresh`: prepare creates an independent sibling job,
+imports no previous translation/OCR artifacts and returns its actual `job_dir`.
+Use that returned directory thereafter. Do not relabel an existing translation
+packet's language to reuse it. Legacy unbound jobs remain resumable by their
+explicit path without adding a new language binding.
 
 Read the whole sheet, translation-packet.json.page_context and
 [page-context translation review](../../../references/page-context-translation-review.md).
@@ -55,6 +59,26 @@ record is prose, change its inventory status to pending and include it in the
 packet with its original ID/source before translating. Likewise, dismiss OCR
 only after matching its full content to retained source records, not all OCR
 records together merely because native text exists.
+
+Prepare also exports `translation-units.json`: conservative same-line native
+phrase proposals plus ordered full-page source context, bound to this inventory
+and request. Review membership before translating; different cells, protected
+dimensions, rotations and outline text remain separate. Fill one fluent
+translation per reviewed unit and a grouping `review_note`. Submit only completed
+units (a subset is allowed) in a separate file:
+
+```powershell
+python scripts/native_cad_pipeline.py merge-units <job> --translations <job>/unit-translations.json
+```
+
+The importer updates the existing packet atomically, preserving source IDs and
+expanding each phrase into one translated leader and merged members. It rejects
+stale inventories, changed membership and conflicts with existing packet decisions.
+After manual inventory corrections, use the existing packet mechanism below;
+do not rerun prepare merely to export units, because re-extraction can restore
+the original protected-token classification. Proposals are not semantic
+approval; multiline clauses and non-proposed groups use the following
+existing packet mechanism, not forced word-by-word translation.
 
 For a native phrase split across records, keep every ID and source unchanged.
 Choose one leader with `status: translated`, the complete fluent translation
@@ -144,7 +168,11 @@ an overview or a sample of crops.
 Collect defects before editing, then rebuild once and inspect changed regions
 and the complete page. Review rendering reuses one display list per page and
 retains every record, including preserved/dismissed records that may hide errors.
-Unchanged review bundles are hash-cached. Aim for one
+Unchanged review pages are content-cached with their local records and artifacts;
+changed or corrupt pages rebuild, and the assembled report binds the exact source
+and candidate. OCR keys include page content, settings and runtime/model identity;
+valid hits do not start an OCR engine. Cache hits reuse measured artifacts, never
+grant semantic/visual approval or rebind old acceptance evidence. Aim for one
 initial candidate and one consolidated repair. This is a throughput goal, not a
 hard retry gate or permission to deliver defects. Inspect local crops while
 resolving a batch of defects; regenerate the full residual review after the batch.

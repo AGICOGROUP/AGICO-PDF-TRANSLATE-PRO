@@ -31,15 +31,21 @@ adapter workflows.
    override it by relabeling all extracted blocks as `ocr-artifact`.
 4. If an `auto` or `bilingual` report returns
    `document_kind: engineering-drawing`, use its `translation_mode: add_bilingual`.
-   Inventory all clear Chinese and foreign labels, save the five coverage
-   counts in JSON, then run `python scripts/decide_drawing_translation.py
+   Inventory all clear Chinese and foreign labels. Save all five coverage counts
+   together with `language_pair` (the actual paired languages) and
+   `requested_language_pair` (from user intent), each a two-code array such as
+   `["zh", "es"]`. Counts refer to that actual pair, not any foreign language.
+   Use consistent language codes; never infer the requested pair from what is
+   already present. Then run `python formats/pdf/scripts/decide_drawing_translation.py
    --inventory-file <drawing-language-inventory.json> --route-report
    <job>/route-report.json`. The saved route supplies the authoritative document
    kind and output mode; label counts cannot change either. Continue automatically; never pause
    for language confirmation after processing starts.
 5. If that decision is `already_bilingual_complete`, preserve the exact source
-   PDF, mark the task complete, and skip translation. Require Chinese plus one
-   other language, complete semantic pairing, and zero unmatched clear labels.
+   PDF, mark the task complete, and skip translation. This requires matching
+   actual/requested language pairs, complete semantic pairing and zero unmatched
+   clear labels. Unknown or different language pairs continue inventory/translation;
+   they do not justify skipping or declaring the whole task failed.
 6. If the user wants the original text kept visible with a target-language translation
    added beside it (bilingual / dual-language / 双语版 / 中英对照), use
    `formats/pdf/bilingual/SKILL.md` regardless of the PDF type — as long as

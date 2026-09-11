@@ -35,7 +35,26 @@ engineering drawings add bilingual text. Scan supports either mode; native-CAD
 is specialized replacement for native/mixed engineering drawings. Determine
 content with the router, not with the output-language wording.
 
-If a drawing routed to bilingual mode is already a complete
-Chinese-plus-one-foreign-language version, preserve the exact source and mark
-the task completed only in bilingual mode. This shortcut never satisfies an
-explicit monolingual request. Do not ask for redundant language confirmation.
+In bilingual mode, preserve the exact source as already complete only when its
+reviewed language pair matches the user's requested pair and every clear label
+is semantically paired. A complete Chinese-English drawing does not satisfy a
+Chinese-Spanish request. Use the PDF router's language-inventory contract;
+missing pair evidence means continue inventory/translation, not failed delivery.
+This shortcut never satisfies an explicit monolingual request.
+
+For measured tests or resumed jobs, optional `formats/pdf/scripts/session_metrics.py`
+records active wall time independently of adapter QA. From the repository root:
+
+```powershell
+python formats/pdf/scripts/session_metrics.py start --job <job> --source <source> --target-language zh --mode replace --pages 10
+python formats/pdf/scripts/session_metrics.py checkpoint --job <job> --stage translate --status completed
+python formats/pdf/scripts/session_metrics.py status --job <job>
+```
+
+Start at task entry; it cannot recover time spent before `start`. Tool gaps and
+failed retries count; use `pause`/`resume --job <job>` only for an actual pause,
+and pause after delivery to freeze the total. `completed` labels a checkpoint,
+not the timer or QA. Default budget is 120 seconds per page; other adapter budgets
+may use `--budget-per-page`. Same-request start preserves history; mismatched
+source/request cannot overwrite it. Use one writer per job. This diagnostic tool
+is optional, never a new delivery gate or a substitute for actual review.

@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 STAGES = (
@@ -44,18 +45,27 @@ def save_job(job_dir: Path, job: dict[str, Any]) -> None:
     temporary.replace(job_path)
 
 
-def create_job(source: Path, jobs_root: Path) -> Path:
+def create_job(source: Path, jobs_root: Path, *, request: dict | None = None,
+               fresh: bool = False) -> Path:
     source = source.resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
     source_hash = sha256_file(source)
-    job_dir = jobs_root.resolve() / f"{_slug(source.stem)}-{source_hash[:8]}"
+    name = f"{_slug(source.stem)}-{source_hash[:8]}"
+    if request is not None:
+        identity = json.dumps(request, sort_keys=True, ensure_ascii=True).encode('utf-8')
+        name += '-' + hashlib.sha256(identity).hexdigest()[:12]
+    if fresh:
+        name += '-fresh-' + uuid4().hex[:12]
+    job_dir = jobs_root.resolve() / name
     job_dir.mkdir(parents=True, exist_ok=True)
     job_path = job_dir / "job.json"
     if job_path.exists():
         job = load_job(job_dir)
         if job["source"]["sha256"] != source_hash:
             raise ValueError("job identity conflicts with source hash")
+        if job.get('request') != request:
+            raise ValueError('job identity conflicts with translation request')
         return job_dir
     job = {
         "schema_version": 1,
@@ -65,6 +75,7 @@ def create_job(source: Path, jobs_root: Path) -> Path:
         "source": {"path": str(source), "sha256": source_hash},
         "artifacts": {},
         "failures": [],
+        **({'request': request} if request is not None else {}),
     }
     save_job(job_dir, job)
     return job_dir

@@ -15,7 +15,41 @@ their source anchor. A `blank_panel` additionally requires
 must be directly adjacent to that structural anchor under the same distance
 limit.
 
-Copy page geometry and `source_lines` from `extraction-report.json`; do not renumber source-line IDs.
+Copy page geometry and `source_lines` from `extraction-report.json`; do not
+renumber source-line IDs. Visually confirmed missing lines extend that inventory,
+without modifying the cached extraction report.
+
+### Located supplements for replacement continuations
+
+`register_source_supplements.py` accepts this JSON payload. Coordinates must come
+from the manifest's exact source render, not a scaled screenshot. Each box is a
+tight glyph envelope with the cleanup margin already included. The complete
+`source` and `translation` replace the owner's passage; they are not appended.
+
+```json
+{
+  "source_sha256": "<same source hash as the manifest>",
+  "supplements": [{
+    "block_id": "p01-body-01",
+    "source": "Aumentar progresivamente hasta 6000 daN.",
+    "translation": "逐步增至 6000 daN。",
+    "source_lines": [{
+      "id": "p01-visual-001", "page": 1, "rotation": 0,
+      "text": "progresivamente hasta 6000 daN.",
+      "box": [100, 585, 1480, 640]
+    }]
+  }]
+}
+```
+
+The helper registers each new line with `origin: visual_supplement`, adds its ID
+to the existing block and its box to `clean_boxes`, then validates and atomically
+saves the manifest. Existing glyph cleanup stays separate; no union rectangle
+is introduced. It rejects reused IDs, wrong pages/rotations, out-of-bounds boxes
+and non-replacement owners. Do not reapply a saved patch. It does not infer text,
+verify that boxes contain only glyphs, or mark a candidate reviewed. If the full
+translation needs more space, adjust its target box/font through the normal fit
+workflow without dropping content or expanding source cleanup.
 
 ## Typography roles
 
