@@ -3,8 +3,15 @@
 ## Orientation and source mapping
 
 Copy each OCR line's `quad` and cardinal `rotation` from the extraction report.
-Every translated block inherits the rotation of its assigned source line; a
-nonzero rotation may not be omitted or changed. In a `blank_panel`, one
+`rotation` is the clockwise reading direction in source-render pixels (x right,
+y down): 0 reads right, 90 down, 180 left, 270 up. The PDF builder converts this
+to a counterclockwise PDF angle by negating it; do not compensate in the manifest.
+OCR box geometry alone cannot distinguish upright from upside-down text.
+Confirm uncertain directions against the source render; record any correction
+on the manifest source line with its visual evidence and propagate it to its block,
+leaving the extraction cache unchanged. Every translated block inherits the
+confirmed source-line rotation; never assign one angle to all labels merely
+because the page is sideways. In a `blank_panel`, one
 translation maps to exactly one source-line ID. Summary text cannot satisfy
 several source labels.
 

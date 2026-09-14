@@ -19,6 +19,12 @@ review of the rendered PDF. Inventory coverage counts only registered source
 IDs: zero unassigned/missing blocks does not prove OCR found every visible line.
 For replacement output, a clear source-language sentence remaining beside its
 translation is still a cleanup defect; register its geometry and repair locally.
+Direction checks compare actual PDF glyph matrices with the manifest's clockwise
+source-image angles, during the existing text extraction pass. Matching manifest
+fields alone does not prove rendered orientation. During the existing changed-region
+visual review, compare source and target in the same viewing orientation; verify
+reading direction and upright glyphs, including title blocks and rotated notes.
+Do not mark orientation or other visual checks passed without inspecting them.
 Treat automatic overlap results as candidates for the existing anomaly review,
 not as visually confirmed defects. Inspect each flagged word pair in a local
 render with enough surrounding context to judge readability and field alignment.

@@ -207,7 +207,8 @@ def _draw_block(pdf: canvas.Canvas, block: dict, page: dict) -> dict:
     pdf.saveState()
     center_x, center_y = (left + right) / 2, (bottom + top) / 2
     pdf.translate(center_x, center_y)
-    pdf.rotate(angle)
+    # Manifest angles are clockwise in image coordinates; PDF uses y-up.
+    pdf.rotate(-angle)
     local_left, local_bottom = -width / 2, -height / 2
     local_right, local_top = width / 2, height / 2
     pdf.setFillColorRGB(*block.get("color", [0, 0, 0]))
@@ -282,7 +283,7 @@ def _draw_rich_block(pdf: canvas.Canvas, block: dict, page: dict, source_image: 
     pdf.saveState()
     center_x, center_y = (left + right) / 2, (bottom + top) / 2
     pdf.translate(center_x, center_y)
-    pdf.rotate(angle)
+    pdf.rotate(-angle)
     local_left, local_bottom = -width / 2, -height / 2
     local_right, local_top = width / 2, height / 2
     top_cursor = local_top - (max(0, height - content_height) / 2 if block.get("valign") == "center" else 1)
@@ -317,7 +318,7 @@ def _draw_rich_block(pdf: canvas.Canvas, block: dict, page: dict, source_image: 
                         "source_page": page["source_page"],
                         "source_box": list(source_box),
                         "output_box_pt": _rotated_output_box(
-                            center_x, center_y, angle, cursor_x, run_y,
+                            center_x, center_y, -angle, cursor_x, run_y,
                             cursor_x + run["width_pt"], run_y + run["height_pt"],
                         ),
                         "pixel_sha256": hashlib.sha256(crop.tobytes()).hexdigest(),

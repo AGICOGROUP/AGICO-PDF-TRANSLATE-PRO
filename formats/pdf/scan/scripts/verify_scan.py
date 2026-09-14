@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -370,10 +371,39 @@ def words_materially_overlap(first: dict, second: dict) -> bool:
     return x_overlap >= smaller_width * 0.2 and y_overlap >= smaller_height * 0.2
 
 
+def rendered_orientation_mismatches(chars: list[dict], blocks: list[dict], geometry: dict) -> list[dict]:
+    """Compare actual PDF glyph matrices with clockwise source-image angles."""
+    failures = []
+    sx = geometry['width_pt'] / geometry['pixel_width']
+    sy = geometry['height_pt'] / geometry['pixel_height']
+    for block in blocks:
+        if block.get('status') != 'translated':
+            continue
+        x0, y0, x1, y1 = block['box']
+        directions = set()
+        for char in chars:
+            if not str(char.get('text', '')).strip():
+                continue
+            cx = (char['x0'] + char['x1']) / 2
+            cy = (char['top'] + char['bottom']) / 2
+            if x0 * sx <= cx <= x1 * sx and y0 * sy <= cy <= y1 * sy:
+                matrix = char.get('matrix')
+                if matrix is not None:
+                    angle = math.degrees(math.atan2(-matrix[1], matrix[0])) % 360
+                    directions.add(int(round(angle / 90) * 90) % 360)
+        expected = int(block.get('rotation', 0)) % 360
+        if directions != {expected}:
+            failures.append({'block_id': block['id'], 'source_page': geometry['source_page'],
+                             'expected_rotation': expected, 'actual_rotations': sorted(directions)})
+    return failures
+
+
 def extract_output_text(
     pdf_path: Path,
     source_pages: list[int],
     ignore_overlap_regions: dict[int, list[tuple[float, float, float, float]]] | None = None,
+    manifest: dict | None = None,
+    orientation_failures: list[dict] | None = None,
 ) -> tuple[dict[int, str], list[dict]]:
     extracted_by_page: dict[int, str] = {}
     overlap_failures: list[dict] = []
@@ -382,6 +412,10 @@ def extract_output_text(
     with pdfplumber.open(pdf_path) as document:
         for index, page in enumerate(document.pages):
             source_page = source_pages[index]
+            if manifest is not None and orientation_failures is not None:
+                geometry = next(p for p in manifest['pages'] if p['source_page'] == source_page)
+                blocks = [b for b in manifest['blocks'] if b['page'] == source_page]
+                orientation_failures.extend(rendered_orientation_mismatches(page.chars, blocks, geometry))
             visual_text = page.extract_text() or ""
             logical_text = logical_reader.pages[index].extract_text() or ""
             extracted_by_page[source_page] = visual_text + "\n" + logical_text
@@ -531,10 +565,13 @@ def main() -> None:
     if str(visual_review.get("candidate_sha256", "")).lower() != output_hash.lower():
         raise ValueError("visual review is not bound to the candidate PDF SHA-256")
     reader = PdfReader(str(pdf_path))
+    rendered_orientation_failures = []
     extracted, automated_overlap = extract_output_text(
         pdf_path,
         manifest["selected_pages"],
         ignore_overlap_regions={},
+        manifest=manifest,
+        orientation_failures=rendered_orientation_failures,
     )
     residual = []
     if requires_cjk_residual_gate(manifest.get("target_language", "")):
@@ -562,6 +599,7 @@ def main() -> None:
     )
     report.update(
         {
+            'rendered_orientation_failures': rendered_orientation_failures,
             "source": str(source),
             "source_sha256": source_hash,
             "output": str(pdf_path),
@@ -576,7 +614,7 @@ def main() -> None:
     report["translation_review_errors"] = semantic_errors
     if report['unmatched_reviewed_ocr_false_positives']:
         report['warnings']['unmatched_reviewed_ocr_false_positives'] = report['unmatched_reviewed_ocr_false_positives']
-    report["passed"] = report["passed"] and not semantic_errors
+    report["passed"] = report["passed"] and not semantic_errors and not rendered_orientation_failures
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
