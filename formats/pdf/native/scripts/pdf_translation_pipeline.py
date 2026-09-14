@@ -293,7 +293,13 @@ def text_from_chars(chars: list[dict[str, Any]]) -> str:
                 float(char.get("size", 0)),
                 1,
             )
-            if gap > reference * 0.45:
+            # PDF word spaces are often positioning gaps, typically 0.2–0.3 em.
+            # Keep the larger threshold for CJK and rotated text.
+            latin_boundary = bool(re.search(r"[A-Za-z0-9]$", str(previous.get("text", "")))
+                                  and re.match(r"[A-Za-z0-9]", text))
+            horizontal = abs(float(char.get("matrix", (1, 0))[1])) < 0.01
+            threshold = 0.18 if latin_boundary and horizontal else 0.45
+            if gap > reference * threshold:
                 output += " "
         output += text
         previous = char
@@ -334,6 +340,92 @@ def line_record(line: dict[str, Any], page_width: float) -> dict[str, Any] | Non
         "characters": characters,
         "runs": runs_from_characters(characters),
     }
+
+
+def regroup_light_diagram_lines(raw_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Repair light-on-dark labels split across pdfplumber text lines.
+
+    Some CAD exports interleave adjacent baselines in extraction order.  The
+    glyph coordinates remain correct, so regroup only horizontal, visible,
+    near-white text by its actual baseline and leave all other text untouched.
+    """
+    light: list[dict[str, Any]] = []
+    residual: list[dict[str, Any]] = []
+    for raw in raw_lines:
+        keep = []
+        for char in raw.get("chars", []):
+            color = rgb_from_pdf_color(char.get("non_stroking_color"))
+            matrix = char.get("matrix", (1, 0, 0, 1, 0, 0))
+            if (visible_character(char) and luminance(color) > 248
+                    and float(char.get("size", 0)) >= 7
+                    and abs(float(matrix[1])) < 0.01):
+                light.append(char)
+            else:
+                keep.append(char)
+        if keep:
+            residual.append({**raw, "chars": keep})
+
+    baselines: list[list[dict[str, Any]]] = []
+    for char in sorted(light, key=lambda item: (float(item.get("top", 0)), float(item.get("x0", 0)))):
+        match = next((group for group in baselines
+                      if abs(float(char.get("top", 0))
+                             - median(float(item.get("top", 0)) for item in group)) <= 1.0), None)
+        if match is None:
+            baselines.append([char])
+        else:
+            match.append(char)
+
+    repaired = list(residual)
+    for baseline in baselines:
+        ordered = sorted(baseline, key=lambda item: float(item.get("x0", 0)))
+        groups: list[list[dict[str, Any]]] = []
+        for char in ordered:
+            if (groups and float(char.get("x0", 0)) - float(groups[-1][-1].get("x1", 0))
+                    <= max(float(char.get("size", 0)), 7.0) * 1.5):
+                groups[-1].append(char)
+            else:
+                groups.append([char])
+        for chars in groups:
+            repaired.append({
+                "chars": chars,
+                "x0": min(float(char.get("x0", 0)) for char in chars),
+                "x1": max(float(char.get("x1", 0)) for char in chars),
+                "top": min(float(char.get("top", 0)) for char in chars),
+                "bottom": max(float(char.get("bottom", 0)) for char in chars),
+            })
+    return sorted(repaired, key=lambda line: (float(line.get("top", 0)), float(line.get("x0", 0))))
+
+
+def coalesce_inline_fragments(raw_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Join extraction fragments that are really one same-baseline label."""
+    ordered = sorted(raw_lines, key=lambda line: (float(line.get("top", 0)), float(line.get("x0", 0))))
+    merged: list[dict[str, Any]] = []
+    for raw in ordered:
+        chars = list(raw.get("chars", []))
+        if not chars:
+            continue
+        if merged:
+            previous = merged[-1]
+            left_char = dominant_char(previous)
+            right_char = dominant_char(raw)
+            gap = float(raw.get("x0", 0)) - float(previous.get("x1", 0))
+            compatible = (
+                abs(float(raw.get("top", 0)) - float(previous.get("top", 0))) <= 0.75
+                and abs(float(left_char.get("size", 0)) - float(right_char.get("size", 0))) <= 0.5
+                and str(left_char.get("fontname", "")) == str(right_char.get("fontname", ""))
+                and rgb_from_pdf_color(left_char.get("non_stroking_color"))
+                == rgb_from_pdf_color(right_char.get("non_stroking_color"))
+                and -0.5 <= gap <= max(float(right_char.get("size", 0)) * 0.4, 3.0)
+            )
+            if compatible:
+                previous["chars"].extend(chars)
+                previous["x0"] = min(float(previous.get("x0", 0)), float(raw.get("x0", 0)))
+                previous["x1"] = max(float(previous.get("x1", 0)), float(raw.get("x1", 0)))
+                previous["top"] = min(float(previous.get("top", 0)), float(raw.get("top", 0)))
+                previous["bottom"] = max(float(previous.get("bottom", 0)), float(raw.get("bottom", 0)))
+                continue
+        merged.append({**raw, "chars": chars})
+    return merged
 
 
 def can_group(previous: dict[str, Any], current: dict[str, Any], page_width: float) -> bool:
@@ -414,6 +506,59 @@ def group_lines(lines: list[dict[str, Any]], page_width: float) -> list[dict[str
             }
         )
     return records
+
+
+def cell_bound_blocks(raw_lines, table_cells, page_width):
+    """Bind translation units before translation; never guess target column cuts.
+
+    Only multi-column ruled tables qualify. Single-column page frames retain
+    paragraph extraction. Original glyph geometry is not changed.
+    """
+    eligible = set()
+    for index, cell in enumerate(table_cells):
+        a = cell['bbox']
+        if any(other.get('table_index') == cell.get('table_index')
+               and min(a[3], other['bbox'][3]) > max(a[1], other['bbox'][1])
+               and (a[2] <= other['bbox'][0] + 0.5 or other['bbox'][2] <= a[0] + 0.5)
+               for other in table_cells):
+            eligible.add(index)
+    by_cell = {}
+    outside = []
+    for raw in raw_lines:
+        groups = {}
+        for char in raw.get('chars', []):
+            if not visible_character(char):
+                continue
+            x = (char['x0'] + char['x1']) / 2
+            y = (char['top'] + char['bottom']) / 2
+            candidates = [i for i in eligible
+                          if table_cells[i]['bbox'][0] <= x <= table_cells[i]['bbox'][2]
+                          and table_cells[i]['bbox'][1] <= y <= table_cells[i]['bbox'][3]]
+            index = min(candidates, key=lambda i:
+                        (table_cells[i]['bbox'][2] - table_cells[i]['bbox'][0]) *
+                        (table_cells[i]['bbox'][3] - table_cells[i]['bbox'][1])) if candidates else -1
+            groups.setdefault(index, []).append(char)
+        for index, chars in groups.items():
+            record = line_record({**raw, 'chars': chars}, page_width)
+            if record:
+                (outside if index < 0 else by_cell.setdefault(index, [])).append(record)
+    blocks = group_lines(outside, page_width)
+    for index, lines in by_cell.items():
+        # Construct one coherent cell from all its source lines, including
+        # short continuations which ordinary paragraph grouping cannot join.
+        lines.sort(key=lambda line: (line['bbox'][1], line['bbox'][0]))
+        parts = group_lines(lines, page_width)
+        block = parts[0]
+        block['source_text'] = '\n'.join(line['text'] for line in lines)
+        block['translation'] = ''
+        block['lines'] = [line for part in parts for line in part['lines']]
+        block['characters'] = [char for part in parts for char in part['characters']]
+        block['runs'] = runs_from_characters(block['characters'])
+        block['bbox'] = [min(line['bbox'][0] for line in lines), min(line['bbox'][1] for line in lines),
+                         max(line['bbox'][2] for line in lines), max(line['bbox'][3] for line in lines)]
+        block['source_cell_bbox'] = list(table_cells[index]['bbox'])
+        blocks.append(block)
+    return sorted(blocks, key=lambda block: (block['bbox'][1], block['bbox'][0]))
 
 
 def page_table_cells(page: Any) -> list[dict[str, Any]]:
@@ -665,18 +810,27 @@ def extract_command(args: argparse.Namespace) -> None:
     with pdfplumber.open(source) as document:
         for page_index, page in enumerate(document.pages):
             table_cells = page_table_cells(page)
-            raw_lines = page.extract_text_lines(strip=True, return_chars=True) or []
-            lines = [
-                record
-                for line in raw_lines
-                if (record := line_record(line, float(page.width))) is not None
-            ]
-            blocks = group_lines(lines, float(page.width))
+            raw_lines = coalesce_inline_fragments(regroup_light_diagram_lines(
+                page.extract_text_lines(strip=True, return_chars=True) or []
+            ))
+            blocks = cell_bound_blocks(raw_lines, table_cells, float(page.width))
             attach_layout_segments(blocks, table_cells)
             for index, block in enumerate(blocks, 1):
                 block["id"] = f"p{page_index + 1:04d}-b{index:04d}"
                 block["bbox"] = [round(value, 3) for value in block["bbox"]]
                 block["style"]["size"] = round(float(block["style"]["size"]), 3)
+                if args.source_language != args.target_language:
+                    # English source is not a completed Chinese translation.
+                    text = block['source_text']
+                    target_english = str(args.target_language).lower().startswith('en')
+                    # A Latin-script source (e.g. Spanish) cannot be assumed
+                    # English merely because its current block is ASCII.
+                    non_latin_source = str(args.source_language).lower().startswith(('zh', 'ja', 'ko', 'ru'))
+                    already_english = target_english and non_latin_source and not re.search(r'[^\x00-\x7f]', text)
+                    block['translation'] = (text if already_english or not re.search(
+                        r'[A-Za-z\u3400-\u9fff\u0400-\u04ff]', text) else '')
+                else:
+                    block['translation'] = block['source_text']
             total_blocks += len(blocks)
             pages.append(
                 {
@@ -1664,10 +1818,17 @@ def prepared_translation(block: dict[str, Any]) -> str:
     if "render_translation_override" in block:
         return str(block["render_translation_override"]).strip()
     translation = str(block.get("translation", "")).strip()
+    source_box = block.get("bbox", [0, 0, 0, 0])
+    original_source = str(block.get("source_text", ""))
+    if (
+        re.fullmatch(r"[-–—_\s]+", original_source)
+        and float(source_box[2]) - float(source_box[0])
+        < (float(source_box[3]) - float(source_box[1])) * 0.25
+    ):
+        return "—"
     visible_source = "\n".join(
         line.get("text", "") for line in block.get("lines", [])
     )
-    original_source = str(block.get("source_text", ""))
     if original_source.lstrip().startswith("Pos") and not visible_source.lstrip().startswith("Pos"):
         translation = translation.rsplit(" @ ", 1)[-1].strip()
     if cjk_count(original_source) and re.fullmatch(r"[\s.,;:!?-]+", translation):

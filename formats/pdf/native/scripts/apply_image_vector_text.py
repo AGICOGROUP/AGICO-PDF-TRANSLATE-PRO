@@ -143,6 +143,15 @@ def draw_horizontal(
             pdf.drawCentredString((left + right) / 2, y, line)
 
 
+def rotated_label_lines(text: str) -> list[str]:
+    value = str(text or "").replace("\n", " ").strip()
+    for delimiter in ("（", "("):
+        if delimiter in value and value.index(delimiter) >= 2:
+            index = value.index(delimiter)
+            return [value[:index].strip(), value[index:].strip()]
+    return [value]
+
+
 def draw_rotated(
     pdf: canvas.Canvas,
     rect: tuple[float, float, float, float],
@@ -150,9 +159,9 @@ def draw_rotated(
 ) -> None:
     left, bottom, right, top = rect
     font_name = FONT_BOLD if region.get("bold") else FONT_REGULAR
-    text = region["text"].replace("\n", " ")
+    lines = rotated_label_lines(region["text"])
     size = fitted_size(
-        [text],
+        lines,
         font_name,
         float(region["max_font"]),
         max(1.0, top - bottom - 1.0),
@@ -162,7 +171,10 @@ def draw_rotated(
     pdf.translate((left + right) / 2, (bottom + top) / 2)
     pdf.rotate(float(region.get("rotation", 90)))
     pdf.setFont(font_name, size)
-    pdf.drawCentredString(0, -size * 0.34, text)
+    line_height = size * 1.16
+    baseline = ((len(lines) - 1) * line_height) / 2 - size * 0.34
+    for index, line in enumerate(lines):
+        pdf.drawCentredString(0, baseline - index * line_height, line)
     pdf.restoreState()
 
 

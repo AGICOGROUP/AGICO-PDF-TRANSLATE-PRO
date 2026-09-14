@@ -38,6 +38,10 @@ returns a new `job_dir`. Use that returned directory for subsequent commands.
 Do not change manifest languages to repurpose an existing job. Translate the
 compact packet using the available capable model, merge by stable IDs and follow
 the runner's next action. Resume the same job to reuse its valid artifacts.
+Generic machine translation may supply a draft, but it does not replace the
+capable model's page-context translation and technical review. Check extracted
+word boundaries before translating Latin-script prose; positioned spaces must
+not become fused words. Unchanged English prose is not completed Chinese output.
 
 ## Translate and lay out native content
 
@@ -54,7 +58,13 @@ replace source text operations with embedded selectable target text. Keep each
 line's text-matrix rotation. Do not suppress content as `ocr-artifact`, replace
 body text with dots, or remove source IDs to obtain a passing report.
 
-Use coherent paragraphs, not independently centered OCR lines. Preserve source
+Use coherent paragraphs, not independently centered OCR lines. New extraction
+binds multi-column ruled-table content to `source_cell_bbox` before translation:
+translate the complete cell, including its continuations, while retaining page
+and row context. Do not concatenate neighboring cells for translation or split
+the target by word counts to recover columns. Old cross-cell manifests need
+reviewed `manual_table_parts` or a fresh extraction when mapping fails; shrinking
+an incorrectly mapped row is not a repair. Preserve source
 alignment, reading order, table cells and image exclusion geometry. Fit by
 wrapping at one source-derived baseline per typography group. Only overflowing
 paragraphs may shrink, uniformly within each paragraph, with the reason recorded.
@@ -106,6 +116,10 @@ not establish semantic accuracy by itself. Missing evidence is unverified; zero
 native draws cannot pass when native content was expected. An empty native page
 within a mixed job is legitimate but its image labels still need review.
 Do not prefill passing page records from counts or only replace old review hashes.
+For dense tables, inspect a readable-size render of changed cells; a contact
+sheet alone cannot establish absence of overlap or correct column assignment.
+The measured cell checks verify one draw, text retention and physical bounds;
+they cannot establish translation meaning or make a fabricated review valid.
 
 Completed delivery requires actual three-requirement acceptance, runner stage
 `verified` and `final-qa.json` passed. Retain cosmetic warnings. Scan-dominated

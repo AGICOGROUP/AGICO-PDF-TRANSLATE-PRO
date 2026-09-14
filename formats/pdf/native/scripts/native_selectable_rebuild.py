@@ -472,6 +472,13 @@ def group_paragraph_flows(page_info: dict[str, Any]) -> list[dict[str, Any]]:
     for block in all_blocks:
         if block.get("render_suppressed"):
             continue
+        source = str(block.get("source_text", ""))
+        box = [float(value) for value in block.get("bbox", [0, 0, 0, 0])]
+        if (
+            re.fullmatch(r"[-–—_\s]+", source)
+            and box[2] - box[0] < (box[3] - box[1]) * 0.25
+        ):
+            continue
         if block.get("force_line_mode"):
             # Bullet rows are drawn by the source's vector bullet marks. They
             # must stay line-addressable instead of being collapsed into a
@@ -763,6 +770,26 @@ def build_table_cell_render_plan(
         translation = pipeline.prepared_translation(block)
         source_lines = block.get("lines", [])
         if not translation or not source_lines:
+            continue
+        bound_cell = block.get('source_cell_bbox')
+        if bound_cell is not None:
+            # Source-bound cells are atomic regardless of target line count.
+            # Never send their prose through numeric-anchor/width splitting.
+            cell = next((item['bbox'] for item in table_cells
+                         if all(abs(float(a) - float(b)) < 1
+                                for a, b in zip(item['bbox'], bound_cell))), None)
+            if cell is None:
+                raise ValueError(f"Source cell changed: {block['id']}; re-extract this page")
+            style = copy.deepcopy(block['style'])
+            style['cell_bound'] = True
+            fragments.append({
+                'block_id': block['id'], 'text': translation,
+                'box': [cell[0] + 2, cell[1] + 0.25, cell[2] - 2, cell[3] - 0.25],
+                'source_top': block['bbox'][1], 'source_left': block['bbox'][0],
+                'style': style, 'role': block.get('role'), 'alignment': 'left',
+                'color': tuple(style.get('color_rgb', [0, 0, 0])),
+            })
+            consumed.add(str(block['id']))
             continue
         target_lines = translation.splitlines()
         if len(target_lines) > len(source_lines):
@@ -1203,18 +1230,20 @@ def register_fonts() -> dict[str, str]:
 
 
 def mark_cjk_styles(manifest: dict[str, Any]) -> None:
-    language = str(manifest.get("target_language", "")).casefold()
-    has_cjk_translation = any(
-        re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", str(block.get("translation", "")))
-        for page in manifest.get("pages", [])
-        for block in page.get("blocks", [])
-    )
-    use_cjk = language.startswith(("zh", "ja", "ko")) or has_cjk_translation
-    if not use_cjk:
-        return
     for page in manifest.get("pages", []):
         for block in page.get("blocks", []):
-            block.setdefault("style", {})["cjk"] = True
+            # Font choice follows the actual rendered string, not merely the
+            # document target language.  Math-only identifiers retained in a
+            # Chinese translation need a symbol-capable Latin font; forcing
+            # them through SimSun can produce missing glyphs and false fit
+            # failures in otherwise valid source boxes.
+            if re.search(
+                r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]",
+                str(block.get("translation", "")),
+            ):
+                block.setdefault("style", {})["cjk"] = True
+            else:
+                block.setdefault("style", {}).pop("cjk", None)
 
 
 def unwrap_page_layout_table(page_info: dict[str, Any]) -> None:
@@ -1292,6 +1321,16 @@ def unwrap_page_layout_table(page_info: dict[str, Any]) -> None:
     promote_wrapped_heading_continuations(page_info)
 
 
+def text_box_horizontal_padding(text: str) -> float:
+    value = str(text or "").strip()
+    return 0.0 if value and not re.search(r"[\w\u3400-\u9fff]", value) else 1.0
+
+
+def fallback_minimum_scale(text: str) -> float:
+    value = str(text or "").strip()
+    return 0.25 if value and not re.search(r"[\w\u3400-\u9fff]", value) else 0.45
+
+
 def draw_fitted_text(
     pdf: canvas.Canvas,
     pipeline,
@@ -1310,8 +1349,10 @@ def draw_fitted_text(
     original_size = (
         float(style.get("role_size", style.get("size", 9))) * LAYOUT_SCALE
     )
-    width = max(int(round((x1 - x0 - 2) * LAYOUT_SCALE)), 1)
-    height = max(int(round((bottom - top - 2) * LAYOUT_SCALE)), 1)
+    horizontal_padding = text_box_horizontal_padding(text)
+    width = max(int(round((x1 - x0 - 2 * horizontal_padding) * LAYOUT_SCALE)), 1)
+    vertical_padding = 0.25 if style.get('cell_bound') else 1.0
+    height = max(int(round((bottom - top - 2 * vertical_padding) * LAYOUT_SCALE)), 1)
     fallback = False
     try:
         font, rendered, spacing = pipeline.fit_text(
@@ -1330,11 +1371,11 @@ def draw_fitted_text(
                 scratch,
                 text,
                 font_path,
-                original_size,
-                width,
-                height,
-                minimum_scale=0.45,
-            )
+            original_size,
+            width,
+            height,
+            minimum_scale=fallback_minimum_scale(text),
+        )
         except ValueError as error:
             raise ValueError(
                 f"Text cannot fit: {text!r}, box={box}, "
@@ -1357,9 +1398,9 @@ def draw_fitted_text(
     for index, line in enumerate(rendered.splitlines() or [""]):
         line_width = pdfmetrics.stringWidth(line, font_name, font_size)
         origin_x = horizontal_text_origin(
-            alignment, x0 + 1, x1 - 1, line_width
+            alignment, x0 + horizontal_padding, x1 - horizontal_padding, line_width
         )
-        line_top = top + 1 + index * leading
+        line_top = top + vertical_padding + index * leading
         pdf.drawString(origin_x, page_height - line_top - ascent, line)
         drawn_boxes.append(
             [origin_x, line_top, origin_x + line_width, line_top + ascent + descent]
@@ -1500,6 +1541,14 @@ def anchor_items(
             }
         )
     return sorted(items, key=lambda item: float(item["left"]))
+
+
+def block_mode_reference_line(
+    block: dict[str, Any], source_lines: list[dict[str, Any]]
+) -> dict[str, Any]:
+    if block.get("force_block_mode"):
+        return {"bbox": block["bbox"], "characters": []}
+    return source_lines[0] if source_lines else {"bbox": block["bbox"]}
 
 
 def make_overlay(
@@ -1778,7 +1827,7 @@ def make_overlay(
                         )
                     )
         else:
-            reference_line = source_lines[0] if source_lines else {"bbox": block["bbox"]}
+            reference_line = block_mode_reference_line(block, source_lines)
             x0, top, right, bottom = resolve_text_container(
                 page_info, block, reference_line
             )

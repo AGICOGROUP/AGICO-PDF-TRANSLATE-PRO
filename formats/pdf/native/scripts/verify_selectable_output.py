@@ -9,6 +9,12 @@ from pypdf.generic import ContentStream
 
 
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def content_character_count(text: str) -> int:
+    """Count semantic text while excluding decorative TOC dot leaders."""
+    without_leaders = re.sub(r"(?:[.．]\s*){3,}", "", str(text or ""))
+    return len(re.sub(r"\s+", "", without_leaders))
 TEXT_SHOW_OPERATORS = {b"Tj", b"TJ", b"'", b'"'}
 
 
@@ -119,7 +125,7 @@ def main() -> None:
             extractable_cjk[page_number] = cjk[:80]
 
         expected = sum(
-            len(
+            content_character_count(
                 str(
                     block.get(
                         "render_translation_override",
@@ -130,7 +136,7 @@ def main() -> None:
             for block in page_manifest["blocks"]
             if float(block["bbox"][1]) < 750
         )
-        visible = len(re.sub(r"\s+", "", output_text))
+        visible = content_character_count(output_text)
         if expected:
             coverage.append(visible / expected)
 

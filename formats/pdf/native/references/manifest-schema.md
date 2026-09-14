@@ -14,6 +14,9 @@ Each block contains:
 - `runs`: contiguous mixed-style spans
 - `lines`: line boxes, characters, runs, and table-cell segments
 - `role`: document-level typography role
+- `source_cell_bbox`: optional physical cell binding assigned by fresh extraction;
+  the complete translation is wrapped inside this cell regardless of target line
+  count. Keep this source-derived binding unchanged during translation.
 - `style`: source font, source size, role size, color, weight, alignment, and
   rotation
 - optional `source_bold_override`: reviewed source-render evidence used only

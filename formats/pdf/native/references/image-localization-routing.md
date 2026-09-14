@@ -169,7 +169,10 @@ confirm item must identify the page, image, label box, OCR text, uncertainty,
 current treatment, and recommended source or decision. Each confirmed label
 must declare `preserve_reason` as `distant_unreadable`, `legal_document`,
 `logo_or_seal`, or `signature_or_stamp`. Clear informational text is never an
-allowed confirm reason. Reported confirm items may remain preserved only under
+allowed confirm reason. `legal_document` applies to a located protected legal
+region, not every label in a drawing with a survey title or company stamp.
+Inventory and translate readable descriptive labels outside that region.
+Reported confirm items may remain preserved only under
 this allow-list; unreported or disallowed confirm items block delivery.
 
 ## Per-image review
