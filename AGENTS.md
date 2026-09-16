@@ -21,7 +21,7 @@
 - 根 `SKILL.md` 按文件格式路由：PDF → `formats/pdf/SKILL.md`（内容级路由）；静态 PNG/JPEG → `formats/image/SKILL.md`。
 - PDF 内容分类仍为 native-text、mixed、scan-only；结合输出模式选择 4 个互斥执行适配器，同一输入只跑一个：
   - `formats/pdf/native/` — 可选文本/混合 PDF（保留可选中文字，单独处理图内文字）
-  - `formats/pdf/scan/` — 纯扫描/图像 PDF
+  - `formats/pdf/scan/` — 纯扫描/图像 PDF；内部按页分流：不含工程图的文字/规则表格页参考原页重建；只要含工程图、试验示意图（包括文字页中的小图），整页保留底图局部替换文字；判断不明确也保留底图，工程图形不重绘。双语 scan 与 PNG/JPEG 载体继续保留底图。
   - `formats/pdf/bilingual/` — 双语对照覆盖层
   - `formats/pdf/native-cad/` — 原生/混合工程图的替换模式，保留矢量
 - 路由必须运行 `python formats/pdf/scripts/route_pdf_file.py <file>` 依内容判断，禁止按扩展名/文件名/用户措辞路由。

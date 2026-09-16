@@ -1,5 +1,11 @@
 # Manifest contract
 
+This is the existing `preserve_raster` builder contract, including additive
+output and the standalone-image carrier. It is not a reconstruction schema.
+Use `reconstruction.md` for structured rebuilt pages and `page-plan.json` for
+strategy selection. In a mixed-strategy job, this manifest contains only raster
+pages and their source lines/blocks, retaining original source page numbers.
+
 ## Orientation and source mapping
 
 Copy each OCR line's `quad` and cardinal `rotation` from the extraction report.

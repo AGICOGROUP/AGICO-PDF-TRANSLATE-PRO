@@ -1,11 +1,24 @@
 # Scan-only PDF workflow
 
+The scan Skill selects `reconstruct` or `preserve_raster` **per page** before
+translation layout. For reconstruction, follow `reconstruction.md`; steps 2–5
+below describe the existing raster path only. Shared source reading, terminology
+and semantic review apply to both. Do not send rebuilt pages to the raster
+builder/verifier or run a second PDF adapter.
+
 For additive bilingual engineering drawings, also read
 `additive-bilingual-drawings.md` and use `action: add_bilingual`.
 
 ## 1. Prepare
 
 Work from the original PDF. Create `<work>/<stem>-<sha8>/` with `extract/`, `manifest/`, `output/`, `review/`, and `qa/`. Keep the source immutable.
+
+For a test, add a unique run suffix and start with fresh artifacts even if the
+input was tested before. Read whole-page renders to write `manifest/page-plan.json`
+with source hash, target language, mode, ordered selected pages and one entry per
+page: source page number, strategy, reason, width/height in points and render path.
+Preserve source page numbers throughout; output positions are a separate mapping.
+OCR does not choose the page strategy automatically.
 
 ```powershell
 python scripts/classify_pdf.py --source "input.pdf"
@@ -14,9 +27,17 @@ python scripts/make_manifest_template.py --extraction "job/extract/extraction-re
 python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json" --output "job/manifest/draft-groups.json"
 ```
 
+The example manifest/draft commands apply to raster pages. If the extraction
+contains both strategies, derive a raster-only extraction JSON in the job:
+retain the immutable source path/hash, select only raster entries in `pages`
+and `selected_pages`, and retain only their `source_lines`, without renumbering.
+Keep the original extraction report unchanged. Feed that subset to the template
+and draft commands. A reconstruction-only job does not need a raster manifest.
+
 ## 2. OCR inventory and translation
 
-Use cached single-scale OCR first. Retry only uncertain regions/pages or inspect
+Use single-scale OCR, reusing completed pages only within the current run or an
+authorized resumed non-test job. Retry only uncertain regions/pages or inspect
 uncertain crops at higher resolution. Compare the existing source render with
 the inventory: OCR can split, merge, hallucinate, or miss text, including whole
 continuation lines. Include clear text in diagrams, tables, photos, screenshots,
@@ -45,7 +66,8 @@ draft. A correction note or extra translated sentence is not a located supplemen
 Each completed page is saved atomically in `extract/page-checkpoints/` before
 the next OCR page begins. Resume with the same command/output directory; valid
 pages are reused, while changed source/configuration/renders are recomputed.
-Use `--no-resume` only for a deliberate cold run. The final extraction report is
+Use a new directory for every fresh test; `--no-resume` also forces a cold extraction.
+The final extraction report is
 assembled from the requested pages in order, so manual batch merging is unnecessary.
 Per-page progress and report `elapsed_seconds` provide real timing evidence.
 The top-level `elapsed_seconds` is this invocation only. Cached pages retain
@@ -76,20 +98,23 @@ split sentences, use the whole page and glossary in every translation batch,
 and confirm OCR corrections against the source pixels. Adjacent pages provide
 context when content continues across a page boundary.
 
-In additive bilingual mode, inventory all clear Chinese labels and their
-nearby target-language counterparts. Preserve the diagram as `bilingual_complete` only
+For the supported Chinese-pair engineering shortcut in additive bilingual mode,
+inventory all clear Chinese labels and their nearby target-language counterparts.
+Other bilingual pages keep actual source-language ownership and do not use that
+shortcut. Preserve the diagram as `bilingual_complete` only
 when every Chinese label is paired. Some target-language text on the image is insufficient;
 translate every unmatched Chinese label.
 
 ## 3. Choose cleanup geometry
 
-The default is tight glyph-only cleanup:
+On `preserve_raster` pages the default is tight glyph-only cleanup. This is not
+the text-page reconstruction procedure:
 
 - Uniform background: use a clean box only 1–3 pixels beyond the glyph envelope.
 - Table cells: clean glyphs, not the whole cell. If a rule crosses text, clean the smallest necessary interval and rebuild that verified segment with `vector_lines`.
 - Leaders or dotted lines: leave dots outside the target text box intact; rebuild only the verified interrupted segment.
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
-- Photographs/UI/screenshots: do not synthesize unknown background. If text sits on a nonuniform texture and a clean removal cannot be proved, perform pixel-local clone/inpaint outside these generic scripts, then verify the protected structure at high zoom.
+- Photographs/UI/screenshots and intricate backgrounds: do not synthesize unknown background. The current official builder supports sampled/constant glyph fills, not an external inpainted-base import. If it cannot remove text while preserving the background/structure, record a located unsupported edit and keep the result failed/unverified for preview delivery. Do not modify immutable source renders or fabricate cache provenance to ingest externally edited pixels.
 - Logos: translate the readable wording while preserving artwork. A trademark or brand name may use `preserve_confirm` when translation would be incorrect.
 
 ### Icon routing and mixed-color text
@@ -121,11 +146,12 @@ Fit complete paragraphs at the page group's baseline with wrapping first. Only
 an overflowing paragraph may shrink, uniformly as a whole; record its baseline,
 fitted size and reason. Other paragraphs retain the baseline. A caption, drawing
 label, header, footer or table cell must not reduce body text size. Actual
-unreadability, not a numeric reference floor, requires correction. Record a real
-fit failure before using a page `layout_adjustment`.
-Try shifting a large image first, then proportional shrink. The old image area
-must be verified uniform background and both old and new boxes become approved
-difference regions.
+unreadability, not a numeric reference floor, requires correction. Keep engineering
+artwork fixed on raster pages. The builder's existing `layout_adjustment`
+capability is not permission to move drawing structure. A page containing any
+engineering figure or test schematic remains on this raster path even if most
+of it is prose. Only text/table pages without such drawings qualify for
+reconstruction and within-page reflow.
 
 ## 4. Build
 

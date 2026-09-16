@@ -17,6 +17,8 @@ as translation context, then review every translated item against the source.
 
 Reuse scan raster extraction/build utilities where useful, but do not inherit
 the scan PDF acceptance gates. This adapter owns its final checks.
+Always use the scan `preserve_raster` path for the image's PDF carrier, even for
+text-heavy images. Scan PDF page reconstruction does not apply to this adapter.
 
 1. Fingerprint the immutable source image and create an isolated job directory.
 2. Run OCR and inspect the full-resolution source image. If OCR finds zero readable text and full-image visual inspection confirms there is no readable text, record `translation_complete_no_text` with the source hash, empty OCR result, and completed visual review. Mark the translation phase complete and stop. Do not create a translated image or PDF, and do not run cleanup, layout, build, or verification. OCR alone is insufficient for this decision.

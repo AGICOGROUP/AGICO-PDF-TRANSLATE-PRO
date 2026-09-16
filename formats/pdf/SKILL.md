@@ -71,8 +71,12 @@ by default and native-CAD only for explicit replacement.
 
 The native adapter rebuilds ordinary selectable documents. The native-CAD
 adapter performs coordinate-bound replacement on engineering drawings. The scan
-adapter treats each page as an image while preserving all non-text pixels and
-graphics. The bilingual overlay adapter keeps all source text unchanged and
+adapter selects a strategy per page: reconstruct mainly text/table pages without
+engineering drawings, with within-page reflow and original nontechnical artwork
+reuse; preserve the whole raster page whenever it contains any engineering
+drawing/test schematic or its content is uncertain, using local text replacement. Both remain inside
+the scan adapter; engineering artwork is never redrawn. Additive scan output
+retains the raster base. The bilingual overlay adapter keeps all source text unchanged and
 adds target-language translations as a new text layer in surrounding whitespace.
 
 `native-text` proves that visible extractable text exists, not that it covers
