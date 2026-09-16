@@ -8,8 +8,8 @@ description: Use when translating PDFs or static PNG/JPEG images whose professio
 This repository supports PDF, PNG, JPG, and JPEG inputs.
 
 Read `references/delivery-policy.md` for the three blocking requirements,
-nonblocking cosmetic diagnostics, incremental review and 120-second-per-page
-scan budget. Apply this shared acceptance policy in the selected adapter.
+nonblocking cosmetic diagnostics, incremental review and the 120-second target /
+180-second ceiling per scan page or image. Apply this policy in the selected adapter.
 
 Choose exactly one adapter from the actual file format:
 
@@ -46,15 +46,18 @@ For measured tests or resumed jobs, optional `formats/pdf/scripts/session_metric
 records active wall time independently of adapter QA. From the repository root:
 
 ```powershell
-python formats/pdf/scripts/session_metrics.py start --job <job> --source <source> --target-language zh --mode replace --pages 10
+python formats/pdf/scripts/session_metrics.py start --job <job> --source <source> --target-language zh --mode replace --pages 10 --budget-per-page 180
 python formats/pdf/scripts/session_metrics.py checkpoint --job <job> --stage translate --status completed
 python formats/pdf/scripts/session_metrics.py status --job <job>
 ```
 
 Start at task entry; it cannot recover time spent before `start`. Tool gaps and
-failed retries count; use `pause`/`resume --job <job>` only for an actual pause,
-and pause after delivery to freeze the total. `completed` labels a checkpoint,
-not the timer or QA. Default budget is 120 seconds per page; other adapter budgets
-may use `--budget-per-page`. Same-request start preserves history; mismatched
+failed retries count; use `pause`/`resume --job <job>` only for an actual pause
+or final completion. A helper such as image `finish` already freezes its execution
+ledger: do not pause it again. Retain task-entry and final-handoff UTC separately
+to include time outside that ledger. `completed` labels a checkpoint,
+not the timer or QA. The timer's default is the 120-second optimization target;
+for scan/image acceptance-ceiling tracking explicitly use `--budget-per-page 180`.
+Other adapter budgets may use their own value. Same-request start preserves history; mismatched
 source/request cannot overwrite it. Use one writer per job. This diagnostic tool
 is optional, never a new delivery gate or a substitute for actual review.

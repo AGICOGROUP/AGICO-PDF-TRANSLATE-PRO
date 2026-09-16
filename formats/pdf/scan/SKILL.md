@@ -124,7 +124,8 @@ take precedence because later table entries contain revisions.
 
 ## Time and completion
 
-Budget 120 seconds per selected page end to end, including interpretation,
+Target 120 seconds per selected page end to end; 120–180 seconds is acceptable,
+and over 180 seconds fails speed acceptance. Include interpretation,
 translation, construction, corrections, review and export. Record actual wall
 time from entry, including retries and tool gaps, excluding explicit pauses.
 Check the budget at stage boundaries and after representative pages. Report

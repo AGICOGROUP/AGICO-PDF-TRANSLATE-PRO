@@ -127,7 +127,58 @@ def _sample_background(image: Image.Image, box: tuple[int, int, int, int]) -> tu
     samples = [np.asarray(image.crop(strip).convert("RGB")).reshape(-1, 3) for strip in strips]
     if not samples:
         return 255, 255, 255
-    return tuple(int(value) for value in np.median(np.concatenate(samples), axis=0))
+    color = tuple(int(value) for value in np.median(np.concatenate(samples), axis=0))
+    # A narrow ring can consist mostly of table rules, not paper. Only use a
+    # wider estimate when BOTH the glyph interior and wider ring confirm light
+    # paper. Dark/colored/photo backgrounds keep their existing sampling rule.
+    if min(color) < 200:
+        interior = image.crop(box).convert('RGB')
+        interior.thumbnail((64,64))
+        inside = np.median(np.asarray(interior).reshape(-1,3), axis=0)
+        if min(inside) > 220:
+            wide = []
+            for a,b,c,d in ((max(0,x0-18),max(0,y0-18),min(width,x1+18),y0),
+                            (max(0,x0-18),y1,min(width,x1+18),min(height,y1+18))):
+                if c > a and d > b:
+                    wide.append(np.asarray(image.crop((a,b,c,d)).convert('RGB')).reshape(-1,3))
+            if wide:
+                candidate = np.median(np.concatenate(wide),axis=0)
+                if min(candidate) > 220:
+                    color = tuple(int(v) for v in candidate)
+    return color
+
+
+def _restore_crossing_rules(source, cleaned, box, background):
+    """Keep long straight rules, not whole components joined to source letters."""
+    if sum(background)/3 < 200:
+        return
+    import cv2  # Already provided by the required RapidOCR runtime.
+    x0,y0,x1,y1 = box
+    x1,y1 = min(source.width,x1+1),min(source.height,y1+1)
+    w,h = x1-x0,y1-y0
+    pad = max(8,round(min(w,h)*0.6))
+    ox,oy = max(0,x0-pad),max(0,y0-pad)
+    area = np.asarray(source.crop((ox,oy,min(source.width,x1+pad),min(source.height,y1+pad))))
+    ink = (area.mean(axis=2) < 180).astype('uint8')
+    cx,cy = x0-ox,y0-oy
+    margin = max(3,round(min(w,h)*0.2))
+    keep = np.zeros((h,w),dtype='uint8')
+    for axis,kernel in ((1,np.ones((1,w+2*margin),dtype='uint8')),
+                        (0,np.ones((h+2*margin,1),dtype='uint8'))):
+        rules = cv2.morphologyEx(ink,cv2.MORPH_OPEN,kernel,
+                               borderType=cv2.BORDER_CONSTANT,borderValue=0)
+        occupied = rules.any(axis=axis)
+        edges = np.flatnonzero(np.diff(np.pad(occupied.astype('int8'),(1,1))))
+        for start,end in zip(edges[::2],edges[1::2]):
+            if end-start > margin:
+                if axis == 1:
+                    rules[start:end,:] = 0
+                else:
+                    rules[:,start:end] = 0
+        keep |= rules[cy:cy+h,cx:cx+w] * 255
+    if keep.any():
+        keep = cv2.dilate(keep,np.ones((3,3),dtype='uint8'))
+        cleaned.paste(source.crop((x0,y0,x1,y1)),(x0,y0),Image.fromarray(keep))
 
 
 def clean_background(original: Image.Image, blocks: list[dict]) -> tuple[Image.Image, dict]:
@@ -146,6 +197,7 @@ def clean_background(original: Image.Image, blocks: list[dict]) -> tuple[Image.I
             background = block.get("background", "sample")
             color = _sample_background(source, box) if background == "sample" else tuple(background)
             draw.rectangle(box, fill=color)
+            _restore_crossing_rules(source, cleaned, box, color)
     changed = np.any(np.asarray(ImageChops.difference(source, cleaned).convert("RGB")) != 0, axis=2)
     outside = changed & ~np.asarray(approved, dtype=bool)
     return cleaned, {

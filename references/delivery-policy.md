@@ -16,13 +16,22 @@ damage is blocking. Do not rebuild solely to eliminate cosmetic warnings.
 Do not relabel real content as OCR noise, replace it with dots or fabricate
 passing reviews. Missing evidence is unverified, never zero failures.
 
-Budget scans at most 120 seconds per selected page end to end (10 pages: 20
-minutes), including extraction, translation, layout, review and export. Apply
+Target 120 seconds per selected scan page or standalone image end to end;
+over 120 through 180 seconds is acceptable, over 180 seconds fails speed
+acceptance. Keep the 120-second optimization target; 180 seconds is the ceiling,
+not the desired runtime. For 10 scan pages, target 20 minutes with a 30-minute
+ceiling; also report individual page overruns rather than hiding them in an average.
+Include instruction reading, extraction, translation, layout, review, export
+and any dispatch/return/final handoff. Executor/subprocess duration alone is not
+the user's complete waiting time. Report it separately, with the full task-entry
+and handoff timestamps; do not infer full-service stability from worker-only runs. Apply
 the same budget to scan-dominated pages in mixed jobs. Count active wall time
 from task start, excluding explicit user pauses. Check time at stage boundaries
 and warn early when representative pages predict an overrun.
 
-Reuse source-bound OCR, translations, clean bases and reviews. Start with one
+Within the same run or an authorized non-test resumption, reuse source-bound
+OCR, translations, clean bases and reviews. Tests use new directories and fresh
+extraction/translation/review, never historical task artifacts. Start with one
 adequate-resolution OCR pass; retry only uncertain/missed regions at higher
 resolution. Render all pages for initial coverage, then only affected pages.
 Reuse unchanged page evidence by content identity and bind the assembled PDF to

@@ -88,6 +88,7 @@ def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:
 
     metadata = {
         "schema_version": 1,
+        "source_path": str(source.resolve()),
         "source_sha256": sha256_file(source),
         "format": declared_format,
         "source_suffix": source.suffix.lower(),

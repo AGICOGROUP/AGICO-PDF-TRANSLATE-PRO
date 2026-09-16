@@ -11,7 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_scan import clean_background
+from build_scan import clean_background, _sample_background
 from contracts import ManifestError, validate_manifest
 
 
@@ -46,6 +46,37 @@ def region_block() -> dict:
 
 
 class RegionCleanupTests(unittest.TestCase):
+    def test_table_rules_do_not_turn_white_cell_cleanup_black(self) -> None:
+        image = Image.new('RGB', (220, 120), 'white')
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 24, 219, 29), fill='black')
+        draw.rectangle((0, 50, 219, 55), fill='black')
+        draw.rectangle((60, 35, 65, 44), fill='black')
+        self.assertEqual(_sample_background(image, (40, 30, 180, 50)), (255,255,255))
+
+    def test_cleanup_keeps_rules_crossing_box_but_removes_interior_glyphs(self) -> None:
+        image = Image.new('RGB', (220, 120), 'white')
+        draw = ImageDraw.Draw(image)
+        draw.line((0, 32, 219, 32), fill='black', width=2)
+        draw.line((90, 0, 90, 119), fill='black', width=2)
+        draw.rectangle((60, 37, 65, 43), fill='black')
+        cleaned, report = clean_background(image, [{'action':'replace',
+            'clean_box':[40,30,180,50], 'background':[255,255,255]}])
+        self.assertEqual(cleaned.getpixel((100,32)), (0,0,0))
+        self.assertEqual(cleaned.getpixel((90,40)), (0,0,0))
+        self.assertEqual(cleaned.getpixel((62,40)), (255,255,255))
+        self.assertEqual(report['outside_approved_pixel_changes'], 0)
+
+    def test_cleanup_does_not_restore_letters_attached_to_table_rules(self) -> None:
+        image = Image.new('RGB', (220,120), 'white')
+        draw = ImageDraw.Draw(image)
+        draw.line((0,32,219,32), fill='black', width=2)
+        draw.rectangle((60,33,65,43), fill='black')
+        cleaned, _ = clean_background(image, [{'action':'replace',
+            'clean_box':[40,30,180,50], 'background':[255,255,255]}])
+        self.assertEqual(cleaned.getpixel((100,32)), (0,0,0))
+        self.assertEqual(cleaned.getpixel((62,40)), (255,255,255))
+
     def test_manifest_accepts_multiple_glyph_cleanup_boxes(self) -> None:
         report = validate_manifest(manifest_for(region_block()))
         self.assertEqual(report["translated_block_count"], 1)

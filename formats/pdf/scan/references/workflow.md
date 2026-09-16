@@ -73,7 +73,15 @@ Per-page progress and report `elapsed_seconds` provide real timing evidence.
 The top-level `elapsed_seconds` is this invocation only. Cached pages retain
 their original processing duration. Neither field includes earlier failed
 attempts, and neither proves total translation time. Keep an independent task
-start timestamp and include retries when assessing the 120-second-per-page budget.
+start timestamp and include retries when assessing the 120-second-per-page target
+and 180-second-per-page acceptance ceiling. Quality requirements are unchanged.
+
+For replacement pages, prefer [compact decisions](compact-decisions.md) and
+`compile_translation.py` over writing a document-specific manifest population
+script. Set page-category styles once; supply translations, corrected ownership
+and located supplements as data. Keep final semantic and visual review agent-owned.
+Batch independent CLI preparation steps and each build/render sequence in one
+tool invocation; avoid repeating schema reads or whole inventories within a job.
 
 Use the draft groups to translate prose with the complete ordered page as
 context and return one translation per region ID. A normal prose page should
@@ -111,7 +119,7 @@ On `preserve_raster` pages the default is tight glyph-only cleanup. This is not
 the text-page reconstruction procedure:
 
 - Uniform background: use a clean box only 1–3 pixels beyond the glyph envelope.
-- Table cells: clean glyphs, not the whole cell. If a rule crosses text, clean the smallest necessary interval and rebuild that verified segment with `vector_lines`.
+- Table cells: clean glyphs, not the whole cell. The builder preserves long straight rules crossing glyph boxes. Inspect the result; use `vector_lines` only for a verified interrupted segment that still needs repair, not for routine redraw.
 - Leaders or dotted lines: leave dots outside the target text box intact; rebuild only the verified interrupted segment.
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
 - Photographs/UI/screenshots and intricate backgrounds: do not synthesize unknown background. The current official builder supports sampled/constant glyph fills, not an external inpainted-base import. If it cannot remove text while preserving the background/structure, record a located unsupported edit and keep the result failed/unverified for preview delivery. Do not modify immutable source renders or fabricate cache provenance to ingest externally edited pixels.
@@ -166,8 +174,13 @@ are drawn after the cleaned page image and before target text. For every
 `source_crop` run it records the source page, source box, output box, pixel
 SHA-256, and alt description in the build report.
 
-The builder samples only the original glyph-border pixels and caches lossless
-clean bases under `output/clean-bases/`. Cache validation includes source-render
+The builder samples local glyph-border pixels. If a narrow ring is contaminated
+by a dark table rule, a wider estimate is used only when both the interior and
+wider ring confirm light paper; dark/colored backgrounds retain local sampling.
+Straight-rule preservation does not preserve whole connected components or
+reconstruct signatures. Keep glyph cleanup tight and inspect nearby artwork.
+The builder caches lossless clean bases under `output/clean-bases/`.
+Cache validation includes source-render
 hash, cleanup boxes/colors, raster adjustments and builder implementation hash.
 Changing only wording reuses the base and redraws target text on dirty pages;
 changing fonts invalidates the affected page caches. With no valid page caches,
