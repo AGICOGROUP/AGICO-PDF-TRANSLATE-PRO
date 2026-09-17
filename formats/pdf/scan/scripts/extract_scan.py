@@ -70,6 +70,65 @@ def rotation_from_quad(points) -> int:
     return int((round(angle / 90) * 90) % 360)
 
 
+def recognize_with_angle_guard(engine, crops, allow_retry: bool = True):
+    """Retry only rejected classifier-flipped crops in their original direction."""
+    angles = [0] * len(crops)
+    classified = crops
+    if engine.use_angle_cls:
+        classified, decisions, _ = engine.text_cls(crops)
+        threshold = getattr(engine.text_cls, 'cls_thresh', .9)
+        angles = [180 if str(label) == '180' and float(score) > threshold else 0
+                  for label, score in decisions]
+    readings, _ = engine.text_recognizer(classified)
+    readings = list(readings)
+    attempts = [1] * len(crops)
+    retry = [i for i, ((text, score), angle) in enumerate(zip(readings, angles))
+             if allow_retry and angle == 180 and (not str(text).strip() or float(score) < engine.text_score)]
+    if retry:
+        alternatives, _ = engine.text_recognizer([crops[i] for i in retry])
+        for i, alternative in zip(retry, alternatives):
+            attempts[i] = 2
+            if str(alternative[0]).strip() and float(alternative[1]) > float(readings[i][1]):
+                readings[i] = alternative
+                angles[i] = 0
+    return readings, angles, attempts
+
+
+def uncovered_text_candidates(image: Image.Image, covered_boxes: list) -> list[list[float]]:
+    """Cheap ink-only audit, not OCR or proof of readable text. Never edits pixels."""
+    import cv2
+    factor = min(1.0, 1600 / max(image.size))
+    small = image.convert('L').resize((round(image.width * factor), round(image.height * factor)))
+    ink = (np.asarray(small) < 160).astype(np.uint8)
+    for x0, y0, x1, y1 in covered_boxes:
+        ink[max(0, int(y0 * factor) - 2):min(ink.shape[0], int(y1 * factor) + 3),
+            max(0, int(x0 * factor) - 2):min(ink.shape[1], int(x1 * factor) + 3)] = 0
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    keep = [i for i, (x, y, w, h, area) in enumerate(stats)
+            if i and 2 <= w <= 60 and 4 <= h <= 40 and area >= 5 and w / h <= 6]
+    if not keep:
+        return []
+    heights = [stats[i][3] for i in keep]
+    chars = np.isin(labels, keep).astype(np.uint8)
+    # Justified prose can have several glyph-heights between short words.
+    # Joining only tight words drops the entire row at the character-count gate.
+    boxes = []
+    # Retain tight groups too: a wide join can touch a logo/rule and fail the
+    # line-height filter. These are two cheap morphology passes, not OCR retries.
+    for spacing in (1.5, 4):
+        joined = cv2.dilate(chars, np.ones((3, max(9, int(np.median(heights) * spacing))), np.uint8))
+        _, _, regions, _ = cv2.connectedComponentsWithStats(joined, connectivity=8)
+        for x, y, w, h, area in regions[1:]:
+            if w < max(100, h * 5) or h > 60:
+                continue
+            count = sum(x <= stats[i][0] < x+w and y <= stats[i][1] < y+h for i in keep)
+            box = [round(float(v) / factor, 1) for v in (x, y, x+w, y+h)]
+            if count >= 10 and not any(candidate_is_covered(box, old) for old in boxes):
+                boxes = [old for old in boxes if not candidate_is_covered(old, box)]
+                boxes.append(box)
+    return sorted(boxes, key=lambda box: (box[1], box[0]))
+
+
 def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
     working = image
     if scale != 1.0:
@@ -77,12 +136,38 @@ def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
             (round(image.width * scale), round(image.height * scale)),
             Image.Resampling.LANCZOS,
         )
-    result, _ = engine(np.asarray(working))
+    guarded = all(hasattr(engine, attr) for attr in
+                  ('load_img', 'text_detector', 'get_crop_img_list', 'text_recognizer',
+                   'text_score', 'sorted_boxes', 'use_angle_cls'))
+    if guarded:
+        pixels = engine.load_img(np.asarray(working))
+        h, w = pixels.shape[:2]
+        ratio = getattr(engine, 'width_height_ratio', -1)
+        without_detector = (not getattr(engine, 'use_text_det', True)
+                            or h <= getattr(engine, 'min_height', 0)
+                            or (ratio != -1 and w / h > ratio))
+        if without_detector:
+            boxes, crops = engine.get_boxes_img_without_det(pixels, h, w)
+        else:
+            boxes, _ = engine.text_detector(pixels)
+            if boxes is None or not len(boxes):
+                return []
+            boxes = engine.sorted_boxes(boxes)
+            crops = engine.get_crop_img_list(pixels, boxes)
+        readings, angles, attempts = recognize_with_angle_guard(
+            engine, crops, allow_retry=getattr(engine, '_angle_retry_allowed', True))
+        result = [(box.tolist(), text, score) for box, (text, score) in zip(boxes, readings)]
+    else:
+        result, _ = engine(np.asarray(working))
+        angles = [0] * len(result or [])
+        attempts = [1] * len(result or [])
     records = []
-    for item in result or []:
+    for item, angle, attempt in zip(result or [], angles, attempts):
         points, text, score = item
         value = str(text).strip()
-        if value:
+        if value or guarded:
+            if angle == 180:
+                points = list(points[2:]) + list(points[:2])
             records.append(
                 {
                     "box": _normalize_box(points, scale),
@@ -91,6 +176,9 @@ def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
                     "text": value,
                     "score": float(score),
                     "scale": scale,
+                    "ocr_attempts": attempt,
+                    **({'review_required': True} if guarded and
+                       (not value or float(score) < engine.text_score) else {}),
                 }
             )
     return records
@@ -136,6 +224,14 @@ def _intersection_over_smaller(first: list[float], second: list[float]) -> float
     a = (first[2] - first[0]) * (first[3] - first[1])
     b = (second[2] - second[0]) * (second[3] - second[1])
     return intersection / max(min(a, b), 1e-9)
+
+
+def candidate_is_covered(candidate_box, accepted_box) -> bool:
+    """A recognized fragment must not hide a larger rejected source line."""
+    x0, y0 = max(candidate_box[0], accepted_box[0]), max(candidate_box[1], accepted_box[1])
+    x1, y1 = min(candidate_box[2], accepted_box[2]), min(candidate_box[3], accepted_box[3])
+    area = (candidate_box[2] - candidate_box[0]) * (candidate_box[3] - candidate_box[1])
+    return max(0, x1-x0) * max(0, y1-y0) / max(area, 1e-9) >= .8
 
 
 def merge_ocr_records(records: list[dict]) -> list[dict]:
@@ -275,10 +371,23 @@ def extract_selected_pages(
                 from rapidocr_onnxruntime import RapidOCR
                 engine = RapidOCR()
                 configure_page_detector(engine)
+                if hasattr(engine, 'text_recognizer'):
+                    # An explicit two-scale extraction already spends both attempts.
+                    engine._angle_retry_allowed = len(ocr_scales) == 1
             with Image.open(page_record["render_path"]) as loaded:
                 image = loaded.convert("RGB")
             raw = [record for scale in ocr_scales for record in _ocr_pass(engine, image, scale)]
-            merged = merge_ocr_records(raw)
+            merged = merge_ocr_records([record for record in raw if not record.get('review_required')])
+            candidates = [dict(record, reason='recognition_rejected') for record in raw
+                          if record.get('review_required') and not any(
+                              candidate_is_covered(record['box'], good['box']) for good in merged)]
+            if len(ocr_scales) > 1:
+                for candidate in candidates:
+                    candidate['ocr_attempts'] = len(ocr_scales)
+            candidates.extend({'box': box, 'reason': 'uncovered_ink', 'ocr_attempts': len(ocr_scales)}
+                              for box in uncovered_text_candidates(image, [record['box'] for record in raw]))
+            page_record['ocr_review_candidates'] = [dict(candidate, id=f'p{page_number:02d}-c{i:03d}')
+                                                    for i, candidate in enumerate(candidates, 1)]
             for index, record in enumerate(merged, 1):
                 lines.append(
                     {

@@ -32,6 +32,31 @@ location and attempts in the existing semantic review. Do not count it in
 `untranslated_clear_labels` or `unreadable_text_failures`; the latter concerns
 unreadability introduced in the output. Readable untranslated content remains
 blocking even when OCR missed it. Review does not reset the attempt counter.
+Low scores, empty results or two engine failures alone do not establish source
+illegibility. Check the actual source pixels. Account for every located
+`ocr_review_candidates` ID in the existing semantic review, recording whether
+it was supplemented, confirmed non-text, or an accepted source limitation.
+Clear source-language remnants require checking both inventory ownership and
+cleanup geometry; 100% coverage of recognized OCR lines cannot rule out omissions.
+The CLI verifier independently repeats the inexpensive source-ink audit for all
+selected pages, including legacy manifests without candidate metadata. Newly
+unregistered candidates block completion and appear in
+`unregistered_inventory_candidates`. Run `audit_scan_inventory.py` before build,
+then resolve its candidates in the existing semantic review. Audit IDs bind
+source-render hash, page and geometry; sorted-position changes cannot reuse a
+different region's old disposition. This is not another OCR attempt.
+The CJK residual check alone cannot detect Spanish remnants in Chinese output;
+source inventory and visual source/target comparison are required for every
+language pair. The heuristic cannot prove complete detection of short labels.
+For each candidate, record exactly one object in the existing `corrections` or
+`source_limitations`: `source_id` is the candidate ID, `reason` gives actual
+source-based evidence, and `disposition` is `supplemented`, `preserved`, `non_text`, or
+`illegible`. `supplemented` additionally names `source_line_ids` bound to translated
+blocks at the candidate's location on that page. `preserved` binds source IDs at
+that location to justified `preserve_confirm` blocks for identifiers/trademarks.
+Do not resolve a missing row with an unrelated translated heading elsewhere.
+`illegible` lists the two actual `attempts`. A reviewed-ID
+checkbox alone, or a supplement with no translation ownership, cannot pass.
 
 Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
 reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,

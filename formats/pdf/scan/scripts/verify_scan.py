@@ -13,6 +13,7 @@ from PIL import Image
 from pypdf import PdfReader
 
 from contracts import ManifestError, validate_manifest
+from audit_scan_inventory import audit_inventory
 from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records
 
 
@@ -518,6 +519,9 @@ def validate_translation_review(review: dict | None, manifest: dict, source_hash
     for entry in entries:
         page = entry.get("source_page")
         expected_ids = {line["id"] for line in manifest["source_lines"] if line["page"] == page}
+        expected_ids.update(candidate['id'] for source_page in manifest.get('pages', [])
+                            if source_page['source_page'] == page
+                            for candidate in source_page.get('ocr_review_candidates', []))
         ids = entry.get("reviewed_source_ids", [])
         if not isinstance(ids, list) or any(not isinstance(value, str) for value in ids):
             errors.append(f"page {page}: invalid reviewed source IDs")
@@ -528,6 +532,47 @@ def validate_translation_review(review: dict | None, manifest: dict, source_hash
         context = entry.get("context_checked")
         if not isinstance(context, str) or not context.strip() or not isinstance(entry.get("corrections"), list):
             errors.append(f"page {page}: missing context/corrections evidence")
+        candidates = [candidate for source_page in manifest.get('pages', [])
+                      if source_page['source_page'] == page
+                      for candidate in source_page.get('ocr_review_candidates', [])]
+        corrections = entry.get('corrections') if isinstance(entry.get('corrections'), list) else []
+        limitations = entry.get('source_limitations') if isinstance(entry.get('source_limitations'), list) else []
+        for candidate in candidates:
+            cid = candidate['id']
+            notes = [note for note in corrections + limitations
+                     if isinstance(note, dict) and note.get('source_id') == cid]
+            if len(notes) != 1 or not isinstance(notes[0].get('reason'), str) or not notes[0]['reason'].strip():
+                errors.append(f"page {page}: candidate {cid} needs one explicit source-based disposition")
+                continue
+            note = notes[0]
+            disposition = note.get('disposition')
+            if disposition in ('supplemented', 'preserved'):
+                source_ids = note.get('source_line_ids')
+                owned = {line['id']: line for line in manifest['source_lines'] if line['page'] == page}
+                translated = {sid for block in manifest.get('blocks', []) if block['page'] == page
+                              and ((disposition == 'supplemented' and block.get('action') in ('replace', 'add_bilingual')
+                                    and str(block.get('translation', '')).strip())
+                                   or (disposition == 'preserved' and block.get('action') == 'preserve'
+                                       and block.get('status') == 'preserve_confirm'))
+                              for sid in block['source_line_ids']}
+                if (not isinstance(source_ids, list) or not source_ids
+                        or any(not isinstance(sid, str) or sid not in owned or sid not in translated for sid in source_ids)):
+                    errors.append(f"page {page}: candidate {cid} not bound to translated source lines")
+                else:
+                    c = candidate['box']
+                    area = max(1, (c[2]-c[0]) * (c[3]-c[1]))
+                    intersections = 0
+                    for sid in set(source_ids):
+                        b = owned[sid]['box']
+                        intersections += max(0, min(c[2],b[2])-max(c[0],b[0])) * max(0, min(c[3],b[3])-max(c[1],b[1]))
+                    if intersections / area < .5:
+                        errors.append(f"page {page}: candidate {cid} source lines do not cover its location")
+            elif disposition == 'illegible':
+                attempts = note.get('attempts')
+                if not isinstance(attempts, list) or len(attempts) != 2 or not all(isinstance(a, str) and a.strip() for a in attempts):
+                    errors.append(f"page {page}: candidate {cid} lacks two source-inspection attempts")
+            elif disposition != 'non_text':
+                errors.append(f"page {page}: candidate {cid} has unresolved disposition")
         no_text_reason = entry.get("no_readable_text")
         if not expected_ids and (not isinstance(no_text_reason, str) or not no_text_reason.strip()):
             errors.append(f"page {page}: missing source-based no-readable-text reason")
@@ -561,7 +606,10 @@ def main() -> None:
     output_hash = sha256_file(pdf_path)
     translation_path = Path(args.translation_review) if args.translation_review else Path(args.visual_review).with_name("translation-review.json")
     translation_review = json.loads(translation_path.read_text(encoding="utf-8-sig")) if translation_path.exists() else None
-    semantic_errors = validate_translation_review(translation_review, manifest, source_hash, output_hash)
+    # Recompute cheap source-ink coverage even for legacy manifests. Successful
+    # ownership of recognized lines cannot certify that OCR found every line.
+    audited_manifest, unregistered_candidates = audit_inventory(manifest)
+    semantic_errors = validate_translation_review(translation_review, audited_manifest, source_hash, output_hash)
     if str(visual_review.get("candidate_sha256", "")).lower() != output_hash.lower():
         raise ValueError("visual review is not bound to the candidate PDF SHA-256")
     reader = PdfReader(str(pdf_path))
@@ -612,9 +660,11 @@ def main() -> None:
         }
     )
     report["translation_review_errors"] = semantic_errors
+    report['unregistered_inventory_candidates'] = unregistered_candidates
     if report['unmatched_reviewed_ocr_false_positives']:
         report['warnings']['unmatched_reviewed_ocr_false_positives'] = report['unmatched_reviewed_ocr_false_positives']
-    report["passed"] = report["passed"] and not semantic_errors and not rendered_orientation_failures
+    report["passed"] = (report["passed"] and not semantic_errors
+                        and not rendered_orientation_failures and not unregistered_candidates)
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

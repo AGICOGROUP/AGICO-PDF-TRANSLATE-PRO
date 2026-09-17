@@ -78,6 +78,10 @@ class TextOrientationAndProvenanceTests(unittest.TestCase):
             digest = verify_scan.sha256_file(pdf)
             data = manifest()
             data['source_sha256'] = digest
+            from PIL import Image
+            source_render = root / 'source.png'
+            Image.new('RGB', (600, 800), 'white').save(source_render)
+            data['pages'][0]['render_path'] = str(source_render)
             review = {'candidate_sha256': digest, 'all_pages_rendered': True,
                       'reviewed_changed_regions': True, 'untranslated_clear_labels': 0,
                       'reviewed_ocr_false_positives': [{'output_page': 1, 'box': [0, 0, 10, 10]}]}
@@ -105,6 +109,19 @@ class TextOrientationAndProvenanceTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         verify_scan.main()
                 self.assertFalse(json.loads((root / 'qa.json').read_text(encoding='utf-8'))['passed'])
+                # Old inventories have no candidate metadata: the independent
+                # source audit must still veto an otherwise passing review.
+                from PIL import ImageDraw
+                image = Image.open(source_render).convert('RGB')
+                draw = ImageDraw.Draw(image)
+                for x in range(100, 500, 18):
+                    draw.rectangle((x, 400, x+8, 415), fill='black')
+                image.save(source_render)
+                with self.assertRaises(SystemExit):
+                    verify_scan.main()
+                qa = json.loads((root / 'qa.json').read_text(encoding='utf-8'))
+                self.assertFalse(qa['passed'])
+                self.assertTrue(qa['unregistered_inventory_candidates'])
 
     def test_review_only_dismisses_exact_overlap_on_current_candidate(self):
         import verify_scan

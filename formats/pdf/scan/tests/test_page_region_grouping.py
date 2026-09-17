@@ -31,6 +31,32 @@ def line(
 
 
 class PageRegionGroupingTests(unittest.TestCase):
+    def test_separate_list_marker_attaches_to_its_row_not_previous_item(self):
+        groups = group_page_lines([
+            line('a', 'a)', [510, 1196, 559, 1244]),
+            line('a_text', 'La longitud sera de 2913 mm.', [661, 1192, 1599, 1240]),
+            line('b', '.b)', [500, 1247, 666, 1317]),
+            line('b_text', 'El ancho sera como maximo', [661, 1252, 2242, 1301]),
+            line('b_tail', '330 mm y como minimo 200 mm.', [661, 1307, 2096, 1367]),
+        ], page_height=3264)
+        assert [g['line_ids'] for g in groups] == [['a', 'a_text'], ['b', 'b_text', 'b_tail']]
+
+    def test_continuation_cannot_jump_over_new_paragraph_in_same_column(self):
+        groups = group_page_lines([
+            line('a', 'adicionales, estas se realizaran con cargo al proveedor.', [341, 563, 1452, 613]),
+            line('b', 'El proveedor debe permitir presenciar las pruebas que esta ultima', [488, 618, 2215, 679]),
+            line('c', 'juzgue convenientes.', [343, 684, 771, 736]),
+        ], page_height=3264)
+        assert not any('a' in group['line_ids'] and 'c' in group['line_ids'] and 'b' not in group['line_ids'] for group in groups)
+
+    def test_body_cannot_jump_over_heading_to_earlier_paragraph(self):
+        groups = group_page_lines([
+            line('a', 'Previous paragraph.', [100, 300, 900, 340]),
+            line('h', 'II.3.- New section', [100, 350, 700, 390]),
+            line('b', 'New paragraph.', [100, 400, 900, 440]),
+        ], page_height=1200)
+        assert [group['line_ids'] for group in groups] == [['a'], ['h'], ['b']]
+
     def test_same_baseline_fragments_coalesce_before_paragraph_grouping(self) -> None:
         groups = group_page_lines(
             [

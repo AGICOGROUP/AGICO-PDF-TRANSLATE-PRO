@@ -53,6 +53,18 @@ the last duplicate is a lookup default, not an unconditional semantic override.
    initial inspection plus at most one targeted retry. Preserve and record still
    illegible regions; continue translating all readable content without revisiting
    those regions during later review.
+   Missing detections, low recognition scores and angle-classifier mistakes do
+   not prove source illegibility. Inspect located `ocr_review_candidates` in the
+   page/draft metadata. Readable omissions require verified source supplements,
+   complete passage translations and matching cleanup; never classify them as
+   blurry merely because the OCR engine failed. Direct visual reading needs no
+   additional OCR. Keep candidate IDs in the existing semantic review coverage.
+   Each candidate also needs an explicit disposition with source-pixel evidence;
+   an ID marked reviewed is not evidence that missing text was translated.
+   For omissions in a resumed/legacy job, run `audit_scan_inventory.py` on all
+   selected pages, then compare new draft grouping with existing source-ID
+   ownership. Repair affected passages; do not limit the investigation to user
+   screenshots or reuse old grouping just because its source hash matches.
    Record `preserve_raster` for every page in `manifest/page-plan.json`.
 3. Restore complete sentences across scan lines. Translate headings, paragraphs,
    clauses, lists, cells, captions and diagram labels in whole-page context.
@@ -61,6 +73,13 @@ the last duplicate is a lookup default, not an unconditional semantic override.
    negation and terminology against source pixels. For cement terminology use
    `scripts/glossary_lookup.py`; use its English terms for English output and
    their controlled concepts consistently for other target languages.
+   Check provisional grouping in reading order: a continuation must not jump
+   over a new paragraph or heading to join an earlier paragraph. When an OCR
+   omission is recovered, rebuild the complete affected sentence/paragraph and
+   its ownership and cleanup together, not only the newly recognized fragment.
+   Keep separately detected list markers with their own text; a new list item
+   starts a new region. Registered lines in the wrong paragraph need ownership
+   review even when the ink audit reports no gap.
 4. Use `make_manifest_template.py`, `draft_blocks.py`, compact translation
    decisions and `compile_translation.py`, then the official `build_scan.py`.
    Follow `references/workflow.md`; retain the source image as every page's base.

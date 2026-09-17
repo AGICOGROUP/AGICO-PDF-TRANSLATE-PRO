@@ -18,6 +18,7 @@ def load_report(path: Path) -> dict:
 
 HEADING_RE = re.compile(r"^(?:[IVXLCDM]+|\d+)(?:[.\-]?\d+)*(?:[.)\-]+|\s+-)\s*", re.IGNORECASE)
 LIST_RE = re.compile(r"^(?:[-•]|[a-zA-Z]\)|\d+[.)])\s+")
+LETTER_MARKER_RE = re.compile(r"^\.?\s*[a-zA-Z]\)(?:\s|$)")
 
 
 def _line_role(line: dict, page_height: float | None) -> str:
@@ -32,6 +33,8 @@ def _line_role(line: dict, page_height: float | None) -> str:
     text = str(line.get("text", "")).strip()
     if re.search(r"\s{2,}", text) and len(re.findall(r"\d+(?:[.,]\d+)?", text)) >= 2:
         return "table_cell"
+    if LETTER_MARKER_RE.match(text):
+        return "list_item"
     if HEADING_RE.match(text) and len(text) <= 90:
         return "heading"
     if LIST_RE.match(text):
@@ -43,6 +46,8 @@ def _can_join(group: list[dict], line: dict, median_h: float) -> bool:
     last = group[-1]
     if last["_role"] not in {"body", "list_item"} or line["_role"] not in {"body", "list_item"}:
         return False
+    if line['_role'] == 'list_item':
+        return False
     if int(last.get("rotation", 0)) != int(line.get("rotation", 0)):
         return False
     lx0, ly0, lx1, ly1 = map(float, last["box"])
@@ -50,7 +55,7 @@ def _can_join(group: list[dict], line: dict, median_h: float) -> bool:
     gap = y0 - ly1
     overlap_x = min(lx1, x1) - max(lx0, x0)
     narrower = max(1.0, min(lx1 - lx0, x1 - x0))
-    same_column = overlap_x >= 0.35 * narrower and abs(x0 - lx0) <= 2.5 * median_h
+    same_column = overlap_x >= 0.35 * narrower and abs(x0 - last.get('_body_x0', lx0)) <= 2.5 * median_h
     return -0.35 * median_h <= gap <= 1.8 * median_h and same_column
 
 
@@ -79,10 +84,14 @@ def _coalesce_same_baseline_fragments(rows: list[dict], median_h: float) -> list
             line["_clean_boxes"] = [list(map(float, source["box"]))]
             candidate = logical[-1] if logical and logical[-1].get("_band") is band else None
             gap_x = float(line["box"][0]) - float(candidate["box"][2]) if candidate else float("inf")
-            if candidate is None or not (-0.15 * median_h <= gap_x <= 1.5 * median_h):
+            is_marker = candidate is not None and re.fullmatch(r'\.?\s*[a-zA-Z]\)', str(candidate.get('text', '')).strip())
+            max_gap = (4 if is_marker else 1.5) * median_h
+            if candidate is None or not (-0.15 * median_h <= gap_x <= max_gap):
                 line["_band"] = band
                 logical.append(line)
                 continue
+            if is_marker:
+                candidate['_body_x0'] = float(line['box'][0])
             candidate["text"] = f'{str(candidate.get("text", "")).strip()} {str(line.get("text", "")).strip()}'.strip()
             candidate["box"] = [min(float(candidate["box"][0]), float(line["box"][0])), min(float(candidate["box"][1]), float(line["box"][1])), max(float(candidate["box"][2]), float(line["box"][2])), max(float(candidate["box"][3]), float(line["box"][3]))]
             candidate["score"] = min(float(candidate.get("score", 0)), float(line.get("score", 0)))
@@ -108,11 +117,17 @@ def group_page_lines(lines: list[dict], page_height: float | None = None) -> lis
     groups: list[list[dict]] = []
     for line in rows:
         placed = False
-        for group in groups:
+        # A later row may continue only the nearest preceding group in its
+        # column. Skipping a heading/new paragraph steals its continuation.
+        for group in sorted(groups, key=lambda g: float(g[-1]['box'][1]), reverse=True):
+            previous = group[-1]['box']
+            overlap = min(previous[2], line['box'][2]) - max(previous[0], line['box'][0])
+            if overlap < .35 * min(previous[2] - previous[0], line['box'][2] - line['box'][0]):
+                continue
             if _can_join(group, line, median_h):
                 group.append(line)
                 placed = True
-                break
+            break
         if not placed:
             groups.append([line])
 
@@ -186,7 +201,9 @@ def translation_payload(report: dict) -> dict:
         groups.extend(page_groups)
         pages.append({"source_page": page, "ordered_source_ids": [line_id for group in page_groups for line_id in group["line_ids"]],
                       "page_context": "\n".join(group["text"] for group in page_groups),
-                      "region_ids": [group["id"] for group in page_groups]})
+                      "region_ids": [group["id"] for group in page_groups],
+                      "ocr_review_candidates": next((p.get('ocr_review_candidates', []) for p in report.get('pages', [])
+                                                       if p['source_page'] == page), [])})
     return {
         "source_sha256": report["source_sha256"],
         "group_count": len(groups),

@@ -6,6 +6,15 @@ The manifest contains all selected pages and their source lines/blocks,
 retaining original source page numbers. Record `preserve_raster` throughout
 `page-plan.json`.
 
+Each page may carry `ocr_review_candidates` copied from extraction. These are
+suspected omissions, not accepted source lines: `id`, pixel `box`, `reason`,
+`ocr_attempts`, and optional rejected `text`/`score`/`quad`. Keep the metadata in
+the manifest and draft context. Do not translate rejected guesses automatically.
+Verified text enters `source_lines` through the normal supplement contract;
+candidate IDs are additionally accounted for in the existing semantic review's
+`reviewed_source_ids`. Record non-text decisions or genuine source limitations
+with visual reasons. No candidate record authorizes cleanup on its own.
+
 ## Orientation and source mapping
 
 Copy each OCR line's `quad` and cardinal `rotation` from the extraction report.

@@ -3,7 +3,7 @@
 Use this optional compiler for image carriers and scan `preserve_raster`
 replacement pages. It expands model-authored data into the existing manifest;
 it does not translate, decide grouping, clean images or approve reviews.
-Reconstruction and additive manifests keep their existing workflows.
+Additive manifests keep their existing workflow.
 
 ```powershell
 python scripts/compile_translation.py --extraction job/extract/extraction-report.json --draft job/manifest/draft-groups.json --decisions job/manifest/decisions.json --output job/manifest/translation-manifest.json
@@ -36,6 +36,12 @@ Choose `group` only after checking that it is one semantic/layout unit. Explicit
 paragraph. Every source ID, including supplements, must be assigned exactly once.
 Separate page/rotation boundaries are mandatory. Missing and duplicate IDs fail
 before rendering. Preservation needs a meaningful reason, not blank translation.
+
+Draft groups are provisional: verify reading order and paragraph boundaries.
+Do not accept a continuation assigned across an intervening heading or a new
+paragraph. After recovering a missing source line, use explicit IDs to restore
+the whole affected sentence, removing superseded block ownership. Resolve the
+page's OCR review candidates before treating the translation as complete.
 
 Optional `source` records a visually checked OCR correction. `box` controls target
 placement, while `clean_boxes` defaults to the individual source glyph boxes.

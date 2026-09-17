@@ -37,6 +37,53 @@ the inventory: OCR can split, merge, hallucinate, or miss text, including whole
 continuation lines. Include clear text in diagrams, tables, photos, screenshots,
 seals, logos, headers, footers, and rotated regions.
 
+Extraction retries the original direction only when a classifier-flipped crop
+produces a rejected reading; this counts as its second OCR attempt. It retains
+rejected recognition boxes and runs a bounded, downsampled ink-only coverage
+audit on the existing raster, without another full-page OCR pass. These are
+`ocr_review_candidates` in page metadata and draft payloads, not confirmed text
+or automatic translations. Candidates include IDs, boxes, reasons and attempt
+counts. They survive the current-run checkpoint cache.
+
+Inspect those crops before finalizing translations. A low score or an empty
+detector result is not evidence of blurry source pixels. Read clear text directly
+and register it; otherwise use at most one remaining targeted attempt. For a
+true non-text candidate, record the visual reason. For genuinely illegible text,
+record the source limitation and stop retries. Include candidate IDs alongside
+recognized line IDs in the existing `reviewed_source_ids`, with the disposition
+in corrections/source limitations. Candidate coverage is part of the existing
+semantic review, not proof of accuracy; the ink audit can miss text too.
+The audit combines tight and wide word spacing so justified lines are not
+discarded as short word fragments. It still has short-line/connected-glyph
+blind spots; zero candidates does not replace whole-page visual review.
+Use the explicit candidate disposition fields in `quality-gates.md`; do not
+merely copy all candidate IDs into reviewed coverage. Resolve the identified
+clear source line into its full sentence and cleanup before completed delivery.
+
+For a resumed job created before an extraction/grouping fix, audit the entire
+selected source inventory once, without rerunning OCR. Enrich the authoritative
+manifest before construction; existing candidate IDs and supplements survive:
+
+New audit-only candidates report `ocr_attempts: 0` because this audit performs
+no recognition. This does not reset earlier inspections/OCR: consult the job's
+existing attempt history before any targeted retry, including drawing regions
+already inspected twice.
+
+```powershell
+python scripts/audit_scan_inventory.py --manifest "job/manifest/translation-manifest.json" --output "job/manifest/translation-manifest.json"
+python scripts/draft_blocks.py --extraction "job/manifest/translation-manifest.json" --output "job/manifest/regroup-review.json"
+```
+
+Compare the new groups' source-ID sets against existing block ownership, focusing
+on crossed headings/list items, intervening paragraphs and overlapping target
+areas. This is a review proposal, not authorization to overwrite reviewed
+translations or supplements with a new draft. Ink coverage cannot find a line
+that exists but belongs to the wrong block. Repair located conflicts and rebuild
+affected pages only. Invalidate old completion claims for the affected inventory;
+an unchanged source hash does not validate old grouping or missing OCR metadata.
+Report remaining known defects/unverified pages instead of presenting a
+screenshot-only repair as a document-wide fix.
+
 When a missing line is visually confirmed, register its source text, stable new
 ID, page, rotation and tight glyph box in **source-render pixels**, and bind it
 to the appropriate translated block. For a missing continuation in an existing
@@ -85,6 +132,15 @@ their structure requires it. Preserve numbers, units, model names, standards,
 URLs, emails, and trademarks exactly unless localization is explicitly required.
 Build a document-level glossary before translating repeated technical terms.
 Translate meaning, not OCR noise.
+
+The grouper stops at the nearest preceding region in the same column. It must
+not reach across an intervening heading or paragraph to attach a continuation.
+Separately detected letter markers join their own baseline text across its
+indent; a new list item never continues the previous item. Keep the body indent
+when attaching the following wrapped lines.
+Its grouping remains provisional: visually check the full affected sentence,
+especially after recovering an omitted first/middle line. Translation and
+cleanup ownership must change together; remove superseded partial blocks.
 
 `draft-groups.json` includes stable region IDs and a `pages` array containing
 ordered source IDs, whole-page text and region IDs. Include that page and the
