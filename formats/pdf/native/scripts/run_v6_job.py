@@ -90,7 +90,7 @@ def init_job(
     *, fresh: bool = False,
 ) -> Path:
     if not any(native_char_count(page) for page in PdfReader(source).pages):
-        raise ValueError('scan-only PDF (possibly hidden OCR); use translate-scan-pdf-professionally')
+        raise ValueError('scan-only PDF (possibly hidden OCR); use PDF-TRANSLATE-PRO-SCAN')
     request = {'source_language': _language_identity(source_language),
                'target_language': _language_identity(target_language),
                'translation_mode': 'replace', 'pages': 'all'}
@@ -116,7 +116,7 @@ def init_job(
     _validate_manifest_language(job, manifest_data)
     if not any(page.get("blocks") for page in manifest_data.get("pages", [])):
         raise ValueError(
-            "scan-only PDF detected; use translate-scan-pdf-professionally"
+            "scan-only PDF detected; use PDF-TRANSLATE-PRO-SCAN"
         )
     state.bind_artifact(job_dir, "manifest", manifest)
     inventory_path = job_dir / "images" / "image-inventory.json"

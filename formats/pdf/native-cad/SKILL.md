@@ -1,9 +1,9 @@
 ---
-name: translate-native-cad-pdf
+name: PDF-TRANSLATE-PRO-NATIVE-CAD
 description: Translate native or mixed CAD engineering PDFs in replacement mode while retaining vectors. Uses native extraction, tiled OCR plus a full-page supplement, cell placement proposals, and consolidated review. Excludes scan-only PDFs and bilingual overlay.
 ---
 
-# Native-CAD replacement
+# PDF-TRANSLATE-PRO-NATIVE-CAD
 
 Use for router result (native-text | mixed) + engineering-drawing + replace.
 Commands are relative to this adapter. Retain source vectors in the delivered

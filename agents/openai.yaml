@@ -1,4 +1,4 @@
 interface:
-  display_name: "Professional Document and Image Translation"
+  display_name: "PDF-TRANSLATE-PRO"
   short_description: "Routes PDFs and static PNG/JPEG images to professional translation workflows."
-  default_prompt: "Use $translate-documents-and-images-professionally to translate my PDF, PNG, or JPEG professionally while preserving its layout and graphics."
+  default_prompt: "Use $PDF-TRANSLATE-PRO to translate my PDF, PNG, or JPEG professionally while preserving its layout and graphics."

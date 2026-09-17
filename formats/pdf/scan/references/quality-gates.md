@@ -5,54 +5,33 @@ The three blocking requirements are correct content, complete/readable output
 and intact key structure. Coverage, selectable text, page geometry, meaningful
 color, icon provenance and cleanup checks provide evidence for them.
 
-## Select checks by page strategy
+## Raster workflow acceptance
 
-All pages retain original page geometry and one-to-one source-page correspondence.
-Both strategies require complete source-based semantic review and selectable
-target-language text. Table ownership, values, formulas and original engineering
-artwork remain protected. Rebuilt text/table geometry may change within its page.
-Confirm strategy compliance from the original page: any engineering drawing or
-test schematic requires whole-page `preserve_raster`, including small figures
-surrounded by prose. A mixed-strategy document mixes pages, not strategies within
-one drawing-containing page.
+Every scan-only page uses `preserve_raster`, including prose and regular tables.
+Preserve original page geometry, page correspondence, non-text artwork and
+table/value relationships. Replacement uses local glyph cleanup and selectable
+target text; additive output leaves original pixels unchanged.
 
-| Output | Required execution evidence |
-|---|---|
-| Raster-only, including additive output | Existing manifest, official `build_scan.py` report and `verify_scan.py` result against the exact delivered PDF |
-| Reconstruction-only | Structured source-to-output coverage, reproducible ReportLab build, original asset provenance, final-PDF checks and actual semantic/visual review from `reconstruction.md` |
-| Mixed strategies | The reconstruction checks plus verified raster component reports, source-order assembly mapping and component-to-final page equivalence |
+Required evidence: the raster manifest, official `build_scan.py` report and
+`verify_scan.py` result against the exact delivered PDF, together with actual
+source-based semantic and rendered visual review. Missing, stale, failed or
+unverified blocking evidence prevents `passed`. Do not fabricate passing results
+from OCR confidence, block counts or successful construction alone.
 
-The current raster verifier is not a reconstruction/assembly verifier. For a
-mixed job, run it on the raster component, not on rebuilt pages or the merged
-PDF under a forged raster build report. Preserve its real result. Run the
-job-local final checks prescribed in `reconstruction.md` on the assembled PDF.
-
-Reconstruction/mixed `qa/final-qa.json` records source/candidate hashes, selected
-source pages and, per page, strategy, component reference, coverage result,
-geometry/text/font/bounds checks, semantic/visual review references, actual
-findings and `passed|failed|unverified` status. Include assembly equivalence and
-asset-preservation results and derive overall status from those real results.
-Any missing, stale, failed or unverified blocking evidence prevents `passed`.
-Do not convert unsupported raster checks into zero failures. Rebuilt page
-pixel equality is inapplicable, with content/structure review used instead;
-non-text protection on raster pages and reused/edited artwork remains required.
-
-For initial review, compare each rebuilt page in full with the source and inspect
-table/caption/formula relationships. On raster pages inspect edited areas and
-anomalies, with complete-page semantic review on both strategies. Magnify only
-uncertain areas. After repairs render/review affected pages only with traceable
-unchanged-page evidence. Cosmetic position/font differences on rebuilt pages
-are not failures unless they damage meaning, readability or key structure.
-
-## Existing raster verification contract
-
-The remaining raster-specific fields and commands apply to `preserve_raster`
-components. Shared evidence honesty, semantic accuracy and time limits also
-apply to reconstruction, using the records above.
+Render every page for initial coverage and inspect edited regions and anomalies.
+After repairs, render/review affected pages only; retain unchanged-page evidence
+by content identity. Cosmetic differences are not failures unless they damage
+meaning, readability or key structure.
 
 Source-relative minimum font sizes are warnings. Actual unreadability,
 missing glyphs, meaningful overlap/clipping and structural damage still block
 completed delivery. A warning is not permission to omit or summarize text.
+Source text confirmed illegible under the shared two-attempt policy is a
+documented, nonblocking source limitation. Preserve its pixels and record its
+location and attempts in the existing semantic review. Do not count it in
+`untranslated_clear_labels` or `unreadable_text_failures`; the latter concerns
+unreadability introduced in the output. Readable untranslated content remains
+blocking even when OCR missed it. Review does not reset the attempt counter.
 
 Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
 reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,

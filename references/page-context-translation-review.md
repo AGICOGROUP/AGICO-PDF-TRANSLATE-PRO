@@ -6,6 +6,26 @@ invoke another adapter's verifier or add a separate rendering/OCR pipeline.
 
 ## Translate with page context
 
+For cement/process/equipment terminology, consult the user-revised
+[Chinese-English table](../formats/pdf/scan/references/cement-terminology.md)
+before translating relevant passages in every adapter, including bilingual,
+native-CAD and standalone images. Native PDF bundles the same table locally.
+From the repository root, use `python formats/pdf/scan/scripts/glossary_lookup.py
+scan "<Chinese source passage>"` or `lookup "<Chinese term>"`. The helper indexes
+Chinese only: for English source, search the table's English column directly;
+for other languages, establish the concept from source context, then consult
+the corresponding Chinese-English entry. A missing Chinese match does not prove
+that an English or other-language term is absent.
+
+Prefer the table's equivalent over model wording when the full phrase and
+engineering sense match. Consider returned alternatives in context; longest
+Chinese matches and the last duplicate are lookup defaults, not proof that
+every later entry has the same sense. For other target languages use the matched
+concept consistently. Do not force a conflicting sense or invent a table match.
+Reuse the relevant matches within the job and include them with translation
+batches. In the existing semantic review, note the matched terms used and any
+context-based departures; review their consistency without adding another gate.
+
 Before translating any region, read the complete source page in reading order.
 Include its section heading, paragraphs, lists, table headers and cells, captions,
 footnotes, diagram labels, and embedded-image text. Treat one static image as
@@ -51,7 +71,10 @@ For each page check:
 Correct findings, rebuild only through the adapter's official workflow, and
 re-review affected pages plus any pages affected by a terminology change.
 An unresolved accuracy issue blocks delivery as a completed translation.
-Unreadable source content must be located and explicitly reported, not guessed.
+Apply the shared delivery policy's two-attempt limit to blurry source content.
+Locate and report regions still illegible after those attempts, without guessing
+or retrying during review. These accepted source limitations do not constitute
+unresolved translation defects; readable omissions still do.
 
 ## Adapter-owned review record
 
@@ -80,13 +103,20 @@ Example structure (replace examples with actual reviewed evidence):
 }
 ```
 
+Record accepted illegible regions in a per-page `source_limitations` list with
+source IDs or location, both attempted inspections and the reason reading remains
+unreliable. This is descriptive review evidence, not a new automated gate. Keep
+their IDs in reviewed coverage and use the adapter's existing preservation action
+where an inventory item exists. Do not put accepted source limitations into
+`unresolved_issues`; that field retains actual unresolved translation defects.
+A page may pass only after its remaining readable content and layout are reviewed.
+
 Corrections record source IDs or source location, original OCR when relevant,
 old translation, corrected translation, and the source-based reason. Missing
 OCR labels enter the adapter's source inventory with IDs, located glyph geometry
 and translation ownership before the manifest is finalized. For raster replacement
-include their source cleanup; for additive output preserve source pixels. For
-scan `reconstruct` pages, map source IDs to the new paragraph, cell, caption or
-formula without source-glyph cleanup. Labels inside reused artwork still need
+include their source cleanup; for additive output preserve source pixels.
+Labels inside retained artwork still need
 located local edit evidence. Adding meaning to a neighboring translation without
 the appropriate ownership leaves the original omission unresolved. This distinction
 does not change standalone-image rules. Record actual review

@@ -16,6 +16,19 @@ damage is blocking. Do not rebuild solely to eliminate cosmetic warnings.
 Do not relabel real content as OCR noise, replace it with dots or fabricate
 passing reviews. Missing evidence is unverified, never zero failures.
 
+For handwritten drawings, scans and image text: **应翻尽翻；模糊文字尝试两次仍无法可靠识别，可以跳过。**
+Count the initial source/OCR inspection as attempt one. Only an uncertain region
+gets a second targeted attempt, using an upright crop, useful magnification or
+local OCR as appropriate; do not require all methods. Stop after two attempts
+across extraction, translation and review combined. Preserve genuinely illegible
+source pixels, record page/location and the two attempts in the existing review,
+and disclose these source limitations at delivery. Do not repeat OCR, rendering
+or model calls for those regions. Translate every reliably readable portion;
+OCR failure alone, handwriting or page complexity does not justify skipping it.
+Documented illegible source regions are nonblocking source limitations, not
+untranslated-readable-text or output-readability failures. Clear omissions,
+invented readings and damaged output remain blocking.
+
 Target 120 seconds per selected scan page or standalone image end to end;
 over 120 through 180 seconds is acceptable, over 180 seconds fails speed
 acceptance. Keep the 120-second optimization target; 180 seconds is the ceiling,

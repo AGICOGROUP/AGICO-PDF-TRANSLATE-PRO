@@ -1,9 +1,9 @@
 ---
-name: translate-pdf-professionally
+name: PDF-TRANSLATE-PRO-NATIVE
 description: Use when translating ordinary native-text or mixed native/raster PDFs whose visible selectable text, tables, images and layout must be preserved. Excludes scan-only PDFs with hidden OCR and engineering drawings.
 ---
 
-# Professional native/mixed PDF translation
+# PDF-TRANSLATE-PRO-NATIVE
 
 Use this adapter only when the PDF content router returns it. Visible native
 content, not merely copyable hidden OCR, selects this route. Engineering

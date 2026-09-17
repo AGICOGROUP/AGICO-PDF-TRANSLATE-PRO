@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -15,6 +16,18 @@ def parse_glossary(path: Path) -> tuple[dict[str, dict], dict[str, list[str]]]:
         line = raw.strip()
         if not (line.startswith("|") and line.endswith("|")):
             continue
+        metadata = {}
+        for comment in re.findall(r"<!--(.*?)-->", line):
+            try:
+                value = json.loads(comment.strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                if isinstance(value.get("aliases"), list):
+                    metadata["aliases"] = [a for a in value["aliases"] if isinstance(a, str)]
+                if isinstance(value.get("context"), str):
+                    metadata["context"] = value["context"]
+        line = re.sub(r"<!--.*?-->", "", line)
         cells = [cell.strip() for cell in line.strip("|").split("|")]
         if len(cells) < 2:
             continue
@@ -32,6 +45,7 @@ def parse_glossary(path: Path) -> tuple[dict[str, dict], dict[str, list[str]]]:
             "source": source,
             "translation": translation,
             "line": line_number,
+            **metadata,
         }
     return entries, history
 

@@ -1,9 +1,9 @@
 ---
-name: translate-image-professionally
+name: PDF-TRANSLATE-PRO-IMAGE
 description: Use when translating one static PNG, JPG, or JPEG image while preserving its pixel dimensions, layout, photographs, diagrams, tables, icons, logos, colors, and non-text pixels. Reuses the scan-PDF raster workflow through a one-page PDF bridge and returns the same image format.
 ---
 
-# Professional Image Translation
+# PDF-TRANSLATE-PRO-IMAGE
 
 ## Scope
 
@@ -18,7 +18,7 @@ as translation context, then review every translated item against the source.
 Reuse scan raster extraction/build utilities where useful, but do not inherit
 the scan PDF acceptance gates. This adapter owns its final checks.
 Always use the scan `preserve_raster` path for the image's PDF carrier, even for
-text-heavy images. Scan PDF page reconstruction does not apply to this adapter.
+text-heavy images, preserving the full original image base.
 
 1. Record task-entry UTC before preparation, fingerprint the immutable source,
    and create an isolated job directory. A test always starts fresh; do not load

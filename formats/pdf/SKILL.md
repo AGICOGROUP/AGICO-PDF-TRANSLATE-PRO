@@ -1,9 +1,9 @@
 ---
-name: route-pdf-translation
+name: PDF-TRANSLATE-PRO-ROUTER
 description: Use when an uploaded PDF must be classified by content before professional translation, especially reports, native/mixed PDFs, scan-only PDFs, engineering drawings, bilingual drawings, or requests for bilingual overlay.
 ---
 
-# Route PDF Translation
+# PDF-TRANSLATE-PRO-ROUTER
 
 Classify PDF content as exactly one of `native-text`, `mixed`, or `scan-only`,
 then select exactly one independent execution adapter. `native-cad` is not a
@@ -71,12 +71,10 @@ by default and native-CAD only for explicit replacement.
 
 The native adapter rebuilds ordinary selectable documents. The native-CAD
 adapter performs coordinate-bound replacement on engineering drawings. The scan
-adapter selects a strategy per page: reconstruct mainly text/table pages without
-engineering drawings, with within-page reflow and original nontechnical artwork
-reuse; preserve the whole raster page whenever it contains any engineering
-drawing/test schematic or its content is uncertain, using local text replacement. Both remain inside
-the scan adapter; engineering artwork is never redrawn. Additive scan output
-retains the raster base. The bilingual overlay adapter keeps all source text unchanged and
+adapter preserves the complete raster base on every page, including prose and
+regular tables, using OCR-assisted local text replacement and selectable target
+text. It does not rebuild scanned pages. Engineering artwork is never redrawn.
+Additive scan output retains source text without cleanup. The bilingual overlay adapter keeps all source text unchanged and
 adds target-language translations as a new text layer in surrounding whitespace.
 
 `native-text` proves that visible extractable text exists, not that it covers

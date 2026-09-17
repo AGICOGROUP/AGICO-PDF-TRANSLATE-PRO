@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF-TRANSLATE-PRO-BILINGUAL"
+  short_description: "Add bilingual translations while preserving original PDF content."
+  default_prompt: "Use $PDF-TRANSLATE-PRO-BILINGUAL to retain original PDF text and add target-language translations in surrounding whitespace."

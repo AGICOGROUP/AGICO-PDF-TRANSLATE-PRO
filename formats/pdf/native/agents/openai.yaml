@@ -1,4 +1,4 @@
 interface:
-  display_name: "Professional PDF Translator"
+  display_name: "PDF-TRANSLATE-PRO-NATIVE"
   short_description: "Translate PDFs with selectable text and mandatory visual QA"
-  default_prompt: "Use $translate-pdf-professionally only when the content router selects native/mixed; hidden-OCR scans use scan. Honor my target language and explicit monolingual mode. Preserve selectability, use image-method routing with structural-line evidence, and deliver against content, readability and structure requirements with cosmetic warnings retained."
+  default_prompt: "Use $PDF-TRANSLATE-PRO-NATIVE only when the content router selects native/mixed; hidden-OCR scans use scan. Honor my target language and explicit monolingual mode. Preserve selectability, use image-method routing with structural-line evidence, and deliver against content, readability and structure requirements with cosmetic warnings retained."

@@ -1,5 +1,5 @@
 ---
-name: translate-pdf-bilingual-overlay
+name: PDF-TRANSLATE-PRO-BILINGUAL
 description: >-
   Use when a PDF is an engineering drawing or the user wants to keep the original
   text visible and add the requested translation beside it in surrounding whitespace.
@@ -12,9 +12,12 @@ description: >-
   every source pixel, text block, table grid, image, and graphic unchanged.
 ---
 
-# Bilingual Overlay PDF Translation
+# PDF-TRANSLATE-PRO-BILINGUAL
 
 ## Purpose
+
+Read and follow [page-context translation and terminology review](../../../references/page-context-translation-review.md),
+including the user-revised cement glossary for relevant drawing labels.
 
 Produce a bilingual PDF where the source-language original remains fully
 visible (and selectable where originally selectable), and the requested target-language translation is placed beside it in

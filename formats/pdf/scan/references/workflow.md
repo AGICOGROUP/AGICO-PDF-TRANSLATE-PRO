@@ -1,10 +1,9 @@
 # Scan-only PDF workflow
 
-The scan Skill selects `reconstruct` or `preserve_raster` **per page** before
-translation layout. For reconstruction, follow `reconstruction.md`; steps 2–5
-below describe the existing raster path only. Shared source reading, terminology
-and semantic review apply to both. Do not send rebuilt pages to the raster
-builder/verifier or run a second PDF adapter.
+Every scan-only page uses `preserve_raster`, including prose and regular tables.
+Retain the full original raster base, perform OCR-assisted translation, clean
+source glyph regions locally in replacement mode, and write selectable target
+text. Do not rebuild scanned text/table pages or run a second PDF adapter.
 
 For additive bilingual engineering drawings, also read
 `additive-bilingual-drawings.md` and use `action: add_bilingual`.
@@ -18,7 +17,7 @@ input was tested before. Read whole-page renders to write `manifest/page-plan.js
 with source hash, target language, mode, ordered selected pages and one entry per
 page: source page number, strategy, reason, width/height in points and render path.
 Preserve source page numbers throughout; output positions are a separate mapping.
-OCR does not choose the page strategy automatically.
+Record `preserve_raster` for every page; content determines grouping and placement, not a different page strategy.
 
 ```powershell
 python scripts/classify_pdf.py --source "input.pdf"
@@ -27,12 +26,7 @@ python scripts/make_manifest_template.py --extraction "job/extract/extraction-re
 python scripts/draft_blocks.py --extraction "job/extract/extraction-report.json" --output "job/manifest/draft-groups.json"
 ```
 
-The example manifest/draft commands apply to raster pages. If the extraction
-contains both strategies, derive a raster-only extraction JSON in the job:
-retain the immutable source path/hash, select only raster entries in `pages`
-and `selected_pages`, and retain only their `source_lines`, without renumbering.
-Keep the original extraction report unchanged. Feed that subset to the template
-and draft commands. A reconstruction-only job does not need a raster manifest.
+Use the complete selected-page extraction with these manifest/draft commands.
 
 ## 2. OCR inventory and translation
 
@@ -115,8 +109,7 @@ translate every unmatched Chinese label.
 
 ## 3. Choose cleanup geometry
 
-On `preserve_raster` pages the default is tight glyph-only cleanup. This is not
-the text-page reconstruction procedure:
+The default is tight glyph-only cleanup on every page:
 
 - Uniform background: use a clean box only 1–3 pixels beyond the glyph envelope.
 - Table cells: clean glyphs, not the whole cell. The builder preserves long straight rules crossing glyph boxes. Inspect the result; use `vector_lines` only for a verified interrupted segment that still needs repair, not for routine redraw.
@@ -156,10 +149,8 @@ fitted size and reason. Other paragraphs retain the baseline. A caption, drawing
 label, header, footer or table cell must not reduce body text size. Actual
 unreadability, not a numeric reference floor, requires correction. Keep engineering
 artwork fixed on raster pages. The builder's existing `layout_adjustment`
-capability is not permission to move drawing structure. A page containing any
-engineering figure or test schematic remains on this raster path even if most
-of it is prose. Only text/table pages without such drawings qualify for
-reconstruction and within-page reflow.
+capability is not permission to move drawing structure. Prose and regular tables use the same raster path. Keep their original
+structure and fit translations within verified text areas.
 
 ## 4. Build
 

@@ -1,11 +1,15 @@
 ---
-name: translate-documents-and-images-professionally
+name: PDF-TRANSLATE-PRO
 description: Use when translating PDFs or static PNG/JPEG images whose professional meaning, page layout, tables, graphics and selectable target text must be preserved.
 ---
 
-# Professional Document and Image Translation Router
+# PDF-TRANSLATE-PRO
 
 This repository supports PDF, PNG, JPG, and JPEG inputs.
+
+For every adapter, follow the cement terminology guidance in
+`references/page-context-translation-review.md` when relevant terms occur.
+Use the bundled user-revised table, including for drawing labels and image text.
 
 Read `references/delivery-policy.md` for the three blocking requirements,
 nonblocking cosmetic diagnostics, incremental review and the 120-second target /

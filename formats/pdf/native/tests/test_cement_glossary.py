@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GLOSSARY = ROOT / "references" / "cement-terminology.md"
 LOOKUP = ROOT / "scripts" / "glossary_lookup.py"
-# Exact origin/main glossary, canonical LF; Git checkout line endings are not content.
-EXPECTED_SHA256 = "227c25df5d59fb4ddae9479e313186c98df004539e44ca460b723b1d09419e0d"
+# User-supplied revised glossary, canonical LF; checkout line endings are not content.
+EXPECTED_SHA256 = "4e80bb57ff929cb76f6596edaaee8f5e096626a73622411e06af2f9918a4dd88"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -30,10 +30,14 @@ class CementGlossaryTests(unittest.TestCase):
         self.assertIn("glossary_lookup.py", skill)
         self.assertIn("model", skill.lower())
 
-    def test_lookup_uses_last_revision_for_duplicate_term(self):
+    def test_lookup_keeps_revised_term_separate_from_context_and_aliases(self):
         result = run("lookup", "窑头罩")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["translation"], "Firing hood")
+        entry = json.loads(result.stdout)
+        self.assertEqual(entry["translation"], "Kiln hood")
+        self.assertIn("Firing hood", entry["aliases"])
+        self.assertIn("语境", entry["context"])
+        self.assertNotIn("<!--", " ".join(entry["alternatives"]))
 
     def test_scan_returns_only_terms_found_in_source_text(self):
         result = run("scan", "本项目采用篦冷机和高压辊磨机。")
