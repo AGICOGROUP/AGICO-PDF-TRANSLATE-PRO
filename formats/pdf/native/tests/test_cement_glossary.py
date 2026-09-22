@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import unittest
@@ -12,12 +13,21 @@ ROOT = Path(__file__).resolve().parents[1]
 GLOSSARY = ROOT / "references" / "cement-terminology.md"
 LOOKUP = ROOT / "scripts" / "glossary_lookup.py"
 # User-supplied revised glossary, canonical LF; checkout line endings are not content.
-EXPECTED_SHA256 = "4e80bb57ff929cb76f6596edaaee8f5e096626a73622411e06af2f9918a4dd88"
+# Re-pinned 2026-09-22 after splitting the row-collapsed entry 研磨剂（材料）Abrasive弯矩 back into Abrasive and Moment rows.
+EXPECTED_SHA256 = "af7791f420ff5c3d3f9b254ebcd5dd1a6057becc0eae056f72077eca41012b12"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
+    # The lookup helper prints CJK terms. A Chinese-locale Windows host decodes a
+    # pipe as GBK, so both sides are pinned to UTF-8 instead of following the
+    # caller's shell (which the skill docs tell users to set to utf-8 anyway).
+    environment = dict(os.environ, PYTHONIOENCODING="utf-8")
     return subprocess.run(
-        [sys.executable, str(LOOKUP), *args], capture_output=True, text=True
+        [sys.executable, str(LOOKUP), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=environment,
     )
 
 

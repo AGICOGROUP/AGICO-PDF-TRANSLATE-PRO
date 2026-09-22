@@ -115,7 +115,16 @@ Use these page coordinates for the vector text rectangle.
 ## Commands
 
 ```powershell
+# measure label boxes when no OCR engine is available (see image-localization-routing.md)
+python scripts/locate_image_labels.py detect images/x.png --out tmp/labels --annotate
+python scripts/locate_image_labels.py grid images/x.png --box 1820 395 2010 535 `
+  --out tmp/grid.png --scale 4 --step 20
+
 python scripts/build_clean_image_bases.py metadata.json --report clean-report.json
+
+# machine audit of the clean base; missed-glyph count must be 0 before overlay
+python scripts/locate_image_labels.py residue images/x.png images/x-clean.png `
+  --metadata metadata.json
 
 python scripts/apply_image_vector_text.py `
   translated-native.pdf metadata.json translated-with-image-text.pdf

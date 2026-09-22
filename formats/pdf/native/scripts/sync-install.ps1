@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 $skillRoot = Split-Path -Parent $PSScriptRoot
-$targetRoot = "C:\Users\Administrator\.codex\skills\PDF-TRANSLATE-PRO-NATIVE"
+$targetRoot = Join-Path $(if ($env:CODEX_SKILLS_ROOT) { $env:CODEX_SKILLS_ROOT } else { Join-Path $env:USERPROFILE ".codex\skills" }) "PDF-TRANSLATE-PRO-NATIVE"
 New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 robocopy $skillRoot $targetRoot /E /PURGE /XD __pycache__ /XF *.pyc | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "robocopy failed with exit code $LASTEXITCODE" }

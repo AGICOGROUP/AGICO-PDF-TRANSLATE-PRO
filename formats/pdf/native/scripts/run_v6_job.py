@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import v6_job_state as state
+import locate_image_labels as label_tools
 from extract_original_images import extract_inventory
 from pypdf import PdfReader
 
@@ -469,6 +470,28 @@ def verify(
     inventory = json.loads(_artifact(job, 'image_inventory').read_text(encoding='utf-8'))
     image_review = json.loads(_artifact(job, 'image_review').read_text(encoding='utf-8'))
     metadata = json.loads(_artifact(job, 'image_metadata').read_text(encoding='utf-8'))
+    # The declared label count must equal a machine measurement of the cleaned
+    # bases, so this gate cannot be cleared by typing 0 into the review file.
+    machine_labels = 0
+    metadata_path = _artifact(job, 'image_metadata')
+    for item in metadata.get("images", []):
+        clean_path = Path(item.get("output", ""))
+        if not clean_path.exists():
+            continue
+        plan_path = item.get("plan") or str(
+            metadata_path.parent / ("label-plan-%s.json" % item.get("id")))
+        report = label_tools.residue_report(
+            item["source"], str(clean_path), str(metadata_path),
+            plan_path=plan_path if os.path.exists(plan_path) else None)
+        # Missed glyphs plus text lines the reviewer never claimed: a label can
+        # no longer be hidden by simply leaving it out of the metadata.
+        machine_labels += len(report["missed"]) + len(report["unclaimed"])
+    declared_labels = int(visual.get("untranslated_clear_image_labels", -1))
+    if declared_labels != machine_labels:
+        raise ValueError(
+            "untranslated_clear_image_labels declared %d but the residue audit "
+            "counts %d missed glyph regions" % (declared_labels, machine_labels)
+        )
     _validate_image_localization_review(image_review, metadata, {item['id'] for item in inventory['images']})
     image_pages = {item['id']: int(item['page']) for item in inventory['images']}
     for item in image_review['images']:

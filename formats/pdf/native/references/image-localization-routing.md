@@ -97,12 +97,55 @@ remove either language, or add another English overlay.
 | `preserve_confirm` | A label is genuinely unreadable, or is a logo/seal, signature/stamp, or protected legal-document region | Preserve the original region, record an allowed `preserve_reason`, and create a `[CONFIRM]` record. |
 | `preserve_bilingual` | Every clear Chinese label already has a semantic English counterpart | Preserve the exact original asset; record complete pair counts and zero unmatched Chinese labels. |
 
-Do not choose a raster method when an editable native source exists. Do not
-choose `constrained_clean_base` merely because manual annotation is tedious.
+Do not choose a raster method when an editable native source exists.
 The presence of some English never proves a diagram is bilingual-complete.
 Inventory all clear Chinese labels; use `preserve_bilingual` only when the
 matched-pair count equals the clear-Chinese count and the unmatched count is
 zero. Otherwise translate only the unmatched Chinese labels.
+
+## Raster route selection: two co-equal routes
+
+Both raster routes below are first-class. Pick one per image from the risk
+profile, not from which one is less work. Both end the same way: a text-free
+clean base plus an embedded vector text overlay.
+
+| | Route A `deterministic_cleanup` (+ `anchored_line_restore`) | Route B `constrained_clean_base` |
+|---|---|---|
+| Removes text by | colour/shape mask inside reviewed `clean_box` regions | high-fidelity image edit of approved local regions only |
+| Non-text pixels | provably untouched outside `clean_box` (`outside_region_pixel_changes = 0`) | restored from the original outside approved regions, then diffed |
+| Wins when | flat fills, white gutters, few crossings between text and artwork | text overlaps artwork it cannot be separated from: outline crossing a word, diagonal/rotated labels riding on a member, gradients, photo or UI texture |
+| Costs when | every box must be measured; crossings need anchors on opposite edges | the model may redraw nearby geometry, so the structural gates are mandatory |
+| Choose first when | the asset carries dimensions, tolerances, tags, QR/barcode or legal marks | the asset is illustrative, or A has already failed a gate twice on the same region |
+
+Fail-closed rule: Route B never replaces a dimensioned or legally significant
+region that Route A can clean, and it may not be chosen merely because manual
+box measurement is tedious. Record the chosen route and the reason on the image
+record.
+
+## Label location without OCR
+
+`scripts/locate_image_labels.py` supplies the measurement tooling when no OCR
+engine is installed (probe `pytesseract`/`easyocr`/`paddleocr`/`tesseract`
+first; reuse one adequate-resolution OCR pass when they exist).
+
+```powershell
+# text-line boxes in native pixels (glyph components with cv2, projection fallback)
+python scripts/locate_image_labels.py detect images/x.png --out tmp/labels --annotate
+
+# gridded zoom used to read exact box coordinates off the artwork
+python scripts/locate_image_labels.py grid images/x.png --box 1820 395 2010 535 `
+  --out tmp/grid.png --scale 4 --step 20
+
+# one readable contact sheet of every detected line, indexed
+python scripts/locate_image_labels.py sheet images/x.png --lines tmp/labels/lines.json `
+  --out tmp/sheet.png --columns 1 --scale 1.3
+```
+
+Detection separates characters from artwork by shape: hatch strokes and rules
+are long and thin (low ink density), glyphs are compact. Use `detect` output as
+candidate boxes only — read the sheet to assign text and use `grid` to confirm
+each box against the artwork before writing metadata. Keep the existing
+two-tries-then-drop limit per region; never guess a label to fill a gap.
 
 Clear informational captions, photo descriptions, marketing copy, and readable
 diagram labels must be translated. A complex photographic background is a
@@ -139,7 +182,7 @@ script interpolates only the declared segment inside the box. Missing,
 same-edge, incompatible, or ambiguous anchors are failures; never infer a new
 branch, bend, arrow, pipe, or connection.
 
-## Constrained clean-base fallback
+## Route B: constrained clean base
 
 Use high-fidelity image editing only for the approved local regions. Supply the
 exact original asset, the label inventory, and this output contract:
@@ -161,6 +204,87 @@ topology, symbols, borders, dimensions, or aspect ratio.
 
 Never ask an image model to generate final wording. After the clean base passes,
 add requested target text as embedded PDF vector text through `apply_image_vector_text.py`.
+
+## Label plan: machine-enumerated coverage
+
+```powershell
+python scripts/locate_image_labels.py plan --image-id p0003-i001 `
+  --inventory images/image-inventory.json --out label-plan-p0003-i001.json
+```
+
+`plan` enumerates every text-like line in the asset and emits, per line, its box, a
+suggested cleanup mode (`text_only_area` when the surround is at least 90% near-white,
+otherwise the sampled colour family), the sampled ink colour, and the PDF `placement`
+read straight from the inventory. Never type a placement by hand and never flip its Y
+axis: inventory `y0/y1` are already PDF bottom-origin. Reuse a plan for the same asset
+only while its `source_sha256` still matches.
+
+Name the file `label-plan-<image-id>.json` next to the metadata and `verify` counts
+every line that no cleanup box claims. Each plan line must end up either claimed by a
+`clean_box` or marked `excluded_artwork` with a non-empty `exclude_reason`; a blank
+reason does not exclude it. This closes the only way a label could escape the audit:
+leaving it out of the metadata entirely.
+
+## Review contract keys that `annotate-images` enforces
+
+Every reviewed image record must carry all of these; each one failed a real run
+before it was written down:
+
+- `method` at image level, not only per label.
+- `confirm_count`, not `confirm_label_count`.
+- `structural_review_complete: true`.
+- `translated + preserved == expected`, and the counts must equal the number of
+  labels carrying each status.
+- A label with `status: confirm` must appear in `confirm_items` under its exact
+  `id`, with an allow-listed `preserve_reason`.
+
+## Two detector threshold sets, on purpose
+
+`plan` and `residue` deliberately use different defaults:
+
+- `plan` runs at `--dark-below 215 --sat-above 60`. Light-tinted labels (pale
+  orange/red engineering text) are invisible at 200/90, and an unlisted label is
+  never declared, never cleaned, and never counted. Broad recall is the point.
+- `residue` runs at `--dark-below 200 --sat-above 90`. The wider net also catches
+  hatch dashes, arrow heads and outline slivers, which then masquerade as missed
+  glyphs. Precision is the point.
+
+Do not "unify" them. Re-measure both when tuning: a threshold that lowers
+`plan_lines` is hiding labels, and one that raises `residue_missed_glyphs`
+without a matching label box is reporting artwork.
+
+## Residue audit (both routes)
+
+`review residual hits` is measured, not eyeballed. After the clean base exists,
+run the same detector over it and diff against the original:
+
+```powershell
+python scripts/locate_image_labels.py residue images/x.png images/x-clean.png \
+  --metadata image-vector-metadata.json --plan label-plan-x.json
+```
+
+- `residue_missed_glyphs` and `residue_unclaimed_text_lines` must both be 0. Ink that
+  survives inside (or overlapping) a declared `clean_box` is reported as
+  `MISSED(declared)` even when nothing was removed there, so an under-sized box cannot
+  hide as "structure".
+- `structure_or_unlisted` holds surviving ink that no cleanup touched: verify
+  each one against the label inventory. Arrowheads, grey bars, symbols such as
+  `ω`, and intentional logos belong here; any readable word does not.
+- `pixels_changed_outside_clean_boxes` must be 0 whenever `--metadata` is given.
+- The audit needs a real difference: compare the original against the clean
+  base. A zero `changed` count alone never proves a region is clear.
+- Route B is audited the same way; the residue gate is not relaxed because a
+  model produced the base.
+
+Fix the offending `clean_box` (or the Route B region mask) and rerun the audit.
+Do not proceed to the vector overlay with a non-zero missed count, and do not
+resolve a crossing by widening the box over the artwork it would erase.
+
+A `MISSED(declared)` hit that survives two box re-placements, with the artwork
+edge running parallel to and interleaved through the glyphs, is the switch
+condition for Route B on that region: colour and shape masks cannot separate two
+parallel bands of the same hue family. Record the switch reason on the image
+record; do not keep thinning boxes until the label is only partly removed.
 
 ## `[CONFIRM]` policy
 
