@@ -51,6 +51,22 @@ source IDs; an empty check is not a successful typography check.
 Do not skip stages. Every artifact is bound by SHA-256. If the source or a
 bound deterministic output changes unexpectedly, return to the owning stage.
 
+Returning to the owning stage is a command, not a hand edit. Re-annotating with
+`--revise` rewinds a job that already passed the image station:
+
+```powershell
+python scripts/run_v6_job.py annotate-images <job> `
+  --metadata <revised-metadata.json> --review <revised-review.json> --revise
+python scripts/run_v6_job.py build-images <job>
+python scripts/run_v6_job.py assemble <job>
+```
+
+The rewind grants only the image station. It refuses unless the source hash and
+the rebuilt native PDF still verify, drops every artifact produced at or after
+annotation, and increments `image_revision` for audit. Use it after a label box
+or cleanup mode fix instead of starting a new job: without it, one corrected box
+costs a full re-extract and native rebuild.
+
 ## Image review schema
 
 Review every ID in `image-inventory.json`, including logos, icons, diagrams,

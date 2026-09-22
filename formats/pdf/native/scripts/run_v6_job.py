@@ -367,6 +367,37 @@ def annotate_images(job_dir: Path, metadata: Path, review: Path) -> None:
     )
 
 
+# Produced at or after the image station; everything upstream stays valid.
+IMAGE_STAGE_ARTIFACTS = (
+    "image_metadata", "image_review", "image_clean_report",
+    "image_vector_report", "candidate_pdf", "final_qa",
+    "translation_review", "visual_review",
+)
+
+
+def rewind_for_image_revision(job_dir: Path) -> None:
+    """Return a job to the image station after a label box or mode fix.
+
+    Without this, editing the metadata post-annotation forces a brand new job
+    and a full re-extract plus native rebuild for what is a seconds-long image
+    step. Only the image station is dropped: the source hash and the rebuilt
+    native PDF must still verify before the rewind is granted.
+    """
+    job = state.load_job(job_dir)
+    if job["stage"] not in ("images_annotated", "images_cleaned", "assembled",
+                            "verified"):
+        raise ValueError(
+            "revise-images applies only after annotate-images; current stage: "
+            + str(job["stage"])
+        )
+    state.assert_artifacts(job_dir, ("manifest", "native_pdf"))
+    for name in IMAGE_STAGE_ARTIFACTS:
+        job["artifacts"].pop(name, None)
+    job["stage"] = "native_translated"
+    job["image_revision"] = int(job.get("image_revision", 0)) + 1
+    state.save_job(job_dir, job)
+
+
 def build_images(job_dir: Path) -> None:
     job = state.load_job(job_dir)
     if job["stage"] != "images_annotated":
@@ -587,6 +618,8 @@ def main() -> None:
     annotate.add_argument("job", type=Path)
     annotate.add_argument("--metadata", type=Path, required=True)
     annotate.add_argument("--review", type=Path, required=True)
+    annotate.add_argument("--revise", action="store_true",
+                          help="Rewind to the image station first after a label fix")
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("job", type=Path)
     verify_parser.add_argument("--visual-review-complete", action="store_true")
@@ -611,6 +644,8 @@ def main() -> None:
         elif args.command == "build-native":
             build_native(args.job)
         elif args.command == "annotate-images":
+            if getattr(args, "revise", False):
+                rewind_for_image_revision(args.job)
             annotate_images(args.job, args.metadata, args.review)
         elif args.command == "build-images":
             build_images(args.job)
