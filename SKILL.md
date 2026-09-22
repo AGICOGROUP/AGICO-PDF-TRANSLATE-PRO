@@ -46,8 +46,10 @@ Chinese-Spanish request. Use the PDF router's language-inventory contract;
 missing pair evidence means continue inventory/translation, not failed delivery.
 This shortcut never satisfies an explicit monolingual request.
 
-For measured tests or resumed jobs, optional `formats/pdf/scripts/session_metrics.py`
-records active wall time independently of adapter QA. From the repository root:
+`formats/pdf/scripts/session_metrics.py` records active wall time independently of
+adapter QA. Start it for every engineering drawing, scan or image job, and for
+measured tests or resumed jobs: without it, repair rounds and per-page gates cannot
+be attributed afterwards and speedwork becomes guesswork. From the repository root:
 
 ```powershell
 python formats/pdf/scripts/session_metrics.py start --job <job> --source <source> --target-language zh --mode replace --pages 10 --budget-per-page 180

@@ -28,14 +28,31 @@ explicit path without adding a new language binding.
 
 Read the whole sheet, translation-packet.json.page_context and
 [page-context translation review](../../../references/page-context-translation-review.md).
-Before first apply, enlarge the source title block, revision table and legend
-until individual characters are readable, and match every populated field to
-the inventory, including vertical/spaced headings such as drawing title,
-number and type. Record crops show only detected text and cannot expose all
-omissions. Use a local high-resolution render if the existing image is too small;
-retry OCR only on unresolved regions. Add missing labels with source coordinates
-to both inventory and packet, and include them in page context before translation.
-Use the supplied commands instead of writing document-specific helper scripts.
+
+Then recover the light-grey layer, which is mandatory before translating a plot:
+CAD sheets often carry a whole layer (parts lists, notes, title-block fields)
+drawn within a few grey levels of its own fill, e.g. 244 on a 249 background, and
+both a normal render and the tiled OCR pass miss it silently.
+
+```powershell
+python scripts/recover_faint.py <job>
+```
+
+It renders at 600 dpi with a fixed threshold (`autocontrast` inverts small crops,
+and 300/400 dpi still misses this layer), back-projects every box to page points,
+gives added records `color: 0` so target text is not drawn in the sampled faint
+colour, proposes `rotation` for tall narrow labels, and writes `faint-labels.json`.
+Added records arrive as `status: "needs_translation"`, so `apply` refuses to run
+until each one is decided: translate it, or mark it `preserved` with a reason when
+it is a part number, drawing or file number, person name, date, or company mark.
+Expect more candidates than there is prose to translate; that is intended.
+
+Finally enlarge the source title block, revision table and legend until individual
+characters are readable and match every populated field to the inventory,
+including vertical/spaced headings such as drawing title, number and type. Record
+crops show only detected text and cannot expose all omissions. `recover_faint.py`
+covers the faint layer; it does not replace this read-across, and fragments of one
+phrase are still merged with `merge-units`.
 
 ## Translate and place in batches
 
@@ -117,13 +134,36 @@ For every outline cover, record actual pixel inspection in cover_review:
 
 ```json
 {"approved":true,"text_only":true,"white_background":true,
+ "source_text_paths":true,"restore_conflicting_paths":true,
  "note":"Actual inspected source label and surrounding structures."}
 ```
+
+Packet field contract, which `apply` enforces by rejection:
+
+- `cover_boxes` is a list of boxes (`[[x0,y0,x1,y1]]`), never one flat box.
+- `source_text_paths` and `restore_conflicting_paths` belong **inside**
+  `cover_review`; a copy at the record top level is read as absent.
+- CAD glyphs are painted as many small filled paths, so any outline cover reports
+  `filled_region`/`curve` conflicts. Without `source_text_paths` those own-glyph
+  strokes count as real damage and `apply` stops with `unsafe_outline_regions`.
+- Only inventory records with `status: "pending"` need a packet decision;
+  `protected` records are never covered and need none.
+- Every `cover_boxes` entry must intersect its own source bbox, so a
+  conflict-free dummy anchor elsewhere on the page is rejected.
+- `restore_conflicting_paths` replays paths on top of the page and cannot
+  reproduce source z-order: a line hidden in the source under a later wide
+  light-coloured stroke reappears as a solid bar once restored. Before
+  restoring, check each queued path against its own colour and against the
+  source render; when a dark path is hidden in the source, move that record's
+  cover box off its ink instead of restoring it. Replaying a near-white stroke
+  is harmless, so judge a path by its colour, never by the ink count inside its
+  bounding box — that box also contains the text just inserted for it.
 
 These are agent review fields, not a request for user permission. Never approve
 from OCR confidence or geometry alone. source_text_paths is only for inspected
 font outlines, never to suppress symbols. restore_conflicting_paths requires
-reviewing the actual paths; do not restore old glyphs. Use cover_boxes and
+reviewing the actual paths; do not restore old glyphs, and expect a restored path
+to come back with its own recorded colour and width. Use cover_boxes and
 layout_box for reviewed adjustments. Visual replacement is not secure deletion.
 
 Use consistent semantic roles: title, body (including ordinary table text),
@@ -165,8 +205,23 @@ zero detections and a successful apply are not evidence of full visual review.
 Record only observations actually made; do not mark all regions reviewed from
 an overview or a sample of crops.
 
-Collect defects before editing, then rebuild once and inspect changed regions
-and the complete page. Review rendering reuses one display list per page and
+Then measure every applied region in one pass:
+
+```powershell
+python scripts/contact_sheet.py <job> --candidate <job>/translated-native-cad.pdf
+```
+
+For each record it takes a source/candidate pixel difference over the target
+region and reads **both** directions — `lost` (source ink erased) and `gained`
+(ink absent from the source) — excluding the footprints of all applied records so
+a neighbouring label's inserted text is never counted as unexplained ink. It
+raises three flags: `no_target_ink` (a translation that did not render),
+`erased_graphic` (ink removed outside every label footprint) and
+`resurrected_path` (ink added outside every target box, the signature of a
+replayed path the source had hidden). Only flagged cells are drawn into
+`contact-sheet.png`, so one readable image replaces a sweep of crops; pass `--all`
+when a clean run still needs sampling. `lost=0` alone never clears a finding,
+because a restored hidden path shows up only as `gained`. Review rendering reuses one display list per page and
 retains every record, including preserved/dismissed records that may hide errors.
 Unchanged review pages are content-cached with their local records and artifacts;
 changed or corrupt pages rebuild, and the assembled report binds the exact source

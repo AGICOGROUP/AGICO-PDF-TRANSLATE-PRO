@@ -25,23 +25,8 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def find_pdftoppm() -> str:
-    # The bundled .CMD shim cannot reliably forward non-ASCII Windows paths.
-    # Prefer the real executable so Chinese source filenames remain intact.
-    bundled = (
-        Path(sys.executable).resolve().parent.parent
-        / "native"
-        / "poppler"
-        / "Library"
-        / "bin"
-        / "pdftoppm.exe"
-    )
-    if bundled.exists():
-        return str(bundled)
-    discovered = shutil.which("pdftoppm")
-    if discovered:
-        return discovered
-    raise RuntimeError("pdftoppm is unavailable")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from poppler import find_pdftoppm, lookup_warning  # noqa: E402
 
 
 def _normalize_box(points, scale: float) -> list[float]:

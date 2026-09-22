@@ -36,21 +36,16 @@ def expected_format(path: Path) -> str:
         raise BridgeError("Input and output images must use PNG or JPEG format") from exc
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pdf" / "scripts"))
+from poppler import find_pdftoppm as _find_pdftoppm  # noqa: E402
+
+
 def find_pdftoppm() -> str:
-    bundled = (
-        Path(sys.executable).resolve().parent.parent
-        / "native"
-        / "poppler"
-        / "Library"
-        / "bin"
-        / "pdftoppm.exe"
-    )
-    if bundled.exists():
-        return str(bundled)
-    discovered = shutil.which("pdftoppm")
-    if discovered:
-        return discovered
-    raise BridgeError("pdftoppm is unavailable")
+    """Shared Poppler lookup, re-raised as BridgeError because callers catch that type."""
+    try:
+        return _find_pdftoppm()
+    except RuntimeError as exc:
+        raise BridgeError(str(exc)) from exc
 
 
 def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:

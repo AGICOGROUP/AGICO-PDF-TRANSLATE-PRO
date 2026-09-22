@@ -79,7 +79,12 @@ adds target-language translations as a new text layer in surrounding whitespace.
 
 `native-text` proves that visible extractable text exists, not that it covers
 all labels. For engineering drawings, compare the extracted inventory with the
-whole sheet. `ocr_recommended_pages` flags sparse native text (at most 100
+whole sheet. A landscape sheet too small for the 1000pt floor (A4/A3 plots) is
+confirmed instead by painted-path density and reports
+`sparse_landscape_sheet` + `vector_heavy_page` in `drawing_evidence`; the probe is
+skipped when PyMuPDF is unavailable or the page lies beyond its 12-page limit, so a
+real drawing can still be reported as `document` — trust the rendered sheet over
+absent evidence. `ocr_recommended_pages` flags sparse native text (at most 100
 characters/page); it is a prompt for visual/OCR inspection, not proof that the
 page is a scan. Native-CAD replacement uses `prepare --ocr always` for these
 pages or any visually confirmed outline/image labels. Bilingual overlay binds

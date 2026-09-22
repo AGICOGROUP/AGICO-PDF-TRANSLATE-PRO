@@ -42,9 +42,14 @@ The CLI verifier independently repeats the inexpensive source-ink audit for all
 selected pages, including legacy manifests without candidate metadata. Newly
 unregistered candidates block completion and appear in
 `unregistered_inventory_candidates`. Run `audit_scan_inventory.py` before build,
-then resolve its candidates in the existing semantic review. Audit IDs bind
+then `resolve_scan_candidates.py`, which spends the one allowed targeted re-OCR
+per candidate and writes a terminal disposition into the manifest with `--apply`.
+`validate_manifest` now rejects a manifest with any undispositioned candidate, so
+the requirement is enforced at build time instead of only being reported after a
+deliverable already exists. Audit IDs bind
 source-render hash, page and geometry; sorted-position changes cannot reuse a
-different region's old disposition. This is not another OCR attempt.
+different region's old disposition. The audit itself is not another OCR attempt;
+the resolver is the single permitted one.
 The CJK residual check alone cannot detect Spanish remnants in Chinese output;
 source inventory and visual source/target comparison are required for every
 language pair. The heuristic cannot prove complete detection of short labels.
@@ -54,7 +59,15 @@ source-based evidence, and `disposition` is `supplemented`, `preserved`, `non_te
 `illegible`. `supplemented` additionally names `source_line_ids` bound to translated
 blocks at the candidate's location on that page. `preserved` binds source IDs at
 that location to justified `preserve_confirm` blocks for identifiers/trademarks.
-Do not resolve a missing row with an unrelated translated heading elsewhere.
+Every bound ID must belong to a block of the matching action type: mixing a
+preserve line into a `supplemented` note, or a translated line into a
+`preserved` note, fails binding. The bound boxes must intersect at least half
+of the candidate area; for a sparse identifier band (item numbers, balloons),
+register each identifier as a located line with its full line-height envelope
+box (plus small margin) so the band passes coverage. Keep `reviewed_source_ids`
+deduplicated (`sorted(set(...))`) because OCR lines and their supplements may
+repeat the same ID. Do not resolve a missing row with an unrelated translated
+heading elsewhere.
 `illegible` lists the two actual `attempts`. A reviewed-ID
 checkbox alone, or a supplement with no translation ownership, cannot pass.
 

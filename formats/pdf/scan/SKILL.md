@@ -46,7 +46,23 @@ the last duplicate is a lookup default, not an unconditional semantic override.
    target language and a task start time. Use an isolated job directory. Every
    requested test starts in a new directory with fresh extraction and review;
    reuse within that same run for repairs, never historical test results.
-2. Render source pages at a readable resolution and inspect them as whole pages.
+2. Confirm the bundled recogniser can actually read the source script, before any
+   OCR or translation work:
+
+   ```powershell
+   python scripts/ocr_language_guard.py require --languages <codes>
+   ```
+
+   The `ch_PP-OCRv4` recogniser maps every glyph onto its own character dictionary,
+   so an unsupported script produces no error and no invalid character, only
+   confident lookalike substitutions: a Russian drawing read as "BJETHA O6JIOTA" at
+   0.84 confidence, which every downstream check accepted. `require` exits 3 and
+   reports the observed coverage when a requested language's script is not
+   representable, so the job stops instead of shipping a fluent-looking mistranslation.
+   The bundled model carries CJK and Latin, so Chinese, English and Spanish are the
+   supported working set; Cyrillic, Greek and kana are not. Use `inspect` to see the
+   full alphabet when the source language is unclear.
+   Render source pages at a readable resolution and inspect them as whole pages.
    Use `extract_scan.py` for OCR assistance, not as the translation authority.
    Magnify only uncertain names, dimensions, tolerances, formulas and dense cells.
    Apply the shared two-attempt limit for blurry source text, including handwriting:

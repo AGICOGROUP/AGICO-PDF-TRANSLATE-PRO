@@ -60,6 +60,17 @@ Use the explicit candidate disposition fields in `quality-gates.md`; do not
 merely copy all candidate IDs into reviewed coverage. Resolve the identified
 clear source line into its full sentence and cleanup before completed delivery.
 
+For a dense parts table/BOM whose OCR captured only a few cells, do not retry
+per-cell OCR. Detect the grid on the source render in render pixels (rows and
+columns whose dark-pixel fraction exceeds ~0.85), derive one cell slice per
+table row, and compute each missed cell's ink envelope (threshold ~<140, inset
+2-4 px inside rules). Validate the slice pitch against the already-captured OCR
+line boxes before scripting. Rotate only the reading crops to upright for
+transcription, then register every missed cell as a located supplement in one
+batch, adding ~3 px cleanup margin to each envelope. On Windows PowerShell,
+pass non-ASCII paths and JSON payloads through UTF-8 script files, never inline
+here-strings (trailing backslashes and console encoding corrupt them).
+
 For a resumed job created before an extraction/grouping fix, audit the entire
 selected source inventory once, without rerunning OCR. Enrich the authoritative
 manifest before construction; existing candidate IDs and supplements survive:
@@ -69,8 +80,17 @@ no recognition. This does not reset earlier inspections/OCR: consult the job's
 existing attempt history before any targeted retry, including drawing regions
 already inspected twice.
 
+Detection is not resolution. Every candidate must reach a terminal disposition
+before a build, because `validate_manifest` now rejects a manifest carrying an
+undispositioned candidate. `resolve_scan_candidates.py` performs the one allowed
+targeted re-OCR per candidate and records `non_text` / `illegible` when the crop
+yields nothing legible, so a missed-but-readable line can never flow into the
+deliverable unnoticed. `recovered` rows are reported, not silently applied: bind
+them with `register_source_supplements.py` first.
+
 ```powershell
 python scripts/audit_scan_inventory.py --manifest "job/manifest/translation-manifest.json" --output "job/manifest/translation-manifest.json"
+python scripts/resolve_scan_candidates.py --manifest "job/manifest/translation-manifest.json" --output "job/review/candidate-resolution.json" --apply "job/manifest/translation-manifest.json"
 python scripts/draft_blocks.py --extraction "job/manifest/translation-manifest.json" --output "job/manifest/regroup-review.json"
 ```
 
@@ -169,6 +189,7 @@ The default is tight glyph-only cleanup on every page:
 
 - Uniform background: use a clean box only 1–3 pixels beyond the glyph envelope.
 - Table cells: clean glyphs, not the whole cell. The builder preserves long straight rules crossing glyph boxes. Inspect the result; use `vector_lines` only for a verified interrupted segment that still needs repair, not for routine redraw.
+- Thin-line remnants (title-underline tips, rule stubs) survive a small cleanup box because the restoration pass treats any straight run spanning such a box as a table rule. To remove a verified remnant, enlarge the clean box until its restoration kernel (`h + 2*max(3, 0.2*min(w, h))`) exceeds the line's continuous ink length inside the padded crop (`pad = max(8, 0.6*min(w, h))`). Diagnose with a source-vs-clean-base pixel diff plus one unit-test of the fill/restore sequence, not repeated full-page eyeball renders.
 - Leaders or dotted lines: leave dots outside the target text box intact; rebuild only the verified interrupted segment.
 - Engineering/process diagrams: preserve pipes, arrows, wires, beams, borders, symbols, and color coding. Never regenerate the diagram. Use local sampling only when the surrounding region is genuinely uniform.
 - Photographs/UI/screenshots and intricate backgrounds: do not synthesize unknown background. The current official builder supports sampled/constant glyph fills, not an external inpainted-base import. If it cannot remove text while preserving the background/structure, record a located unsupported edit and keep the result failed/unverified for preview delivery. Do not modify immutable source renders or fabricate cache provenance to ingest externally edited pixels.
@@ -257,8 +278,10 @@ Render the final output once at the normal verification resolution. Run
 automatic checks across every page. Inspect at high zoom only changed regions,
 `source_crop` restorations, and pages or regions flagged as anomalies. Do not
 create routine page-by-page screenshots or re-review unchanged logos, tables,
-headers, footers, and icons. Create `visual-review.json` using the contract in
-`quality-gates.md`.
+headers, footers, and icons. For a rotated sheet, re-render the output and
+reuse the exact upright crop geometry used for source transcription so every
+region compares 1:1 with its pre-translation evidence. Create
+`visual-review.json` using the contract in `quality-gates.md`.
 
 ```powershell
 python scripts/verify_scan.py --source "input.pdf" --manifest "job/manifest/translation-manifest.json" --pdf "job/output/translated.pdf" --visual-review "job/review/visual-review.json" --report "job/qa/final-qa.json"

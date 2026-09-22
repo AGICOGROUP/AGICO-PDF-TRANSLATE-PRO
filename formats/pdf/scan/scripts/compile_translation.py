@@ -63,6 +63,11 @@ def compile_translation(extraction: dict, draft: dict, decisions: dict) -> dict:
     if len({b['id'] for b in blocks}) != len(blocks):
         raise ValueError('Duplicate region IDs')
     manifest['blocks'] = blocks
+    # The manifest is rebuilt from the extraction, so candidate dispositions recorded earlier
+    # (resolve_scan_candidates --apply) have to be carried over or the build gate would fire on
+    # candidates that were already inspected.
+    if decisions.get('candidate_dispositions'):
+        manifest['candidate_dispositions'] = copy.deepcopy(decisions['candidate_dispositions'])
     validate_manifest(manifest)
     return manifest
 

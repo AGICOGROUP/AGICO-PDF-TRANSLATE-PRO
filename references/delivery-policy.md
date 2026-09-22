@@ -56,3 +56,36 @@ when all three requirements pass, retaining warnings. Otherwise provide the
 latest readable candidate explicitly named/described as a preview, listing
 known defects and unverified items. Keep its real failed/unverified state; never
 set verified/passed for a preview. If no readable candidate exists, report that.
+
+## Preview delivery when a few gate items are indeterminate
+
+The preview path above is the *default* exit when a scan job is essentially
+finished but a small number of gate items cannot be resolved. Do not keep
+blocking, and do not silently ship: hand the user a preview to review.
+
+Offer the preview when all three hold:
+
+1. The unmet items are **inherent to the scan** — illegible or occluded marks,
+   stamp impressions under the title block, missing strokes — and not translation
+   or layout defects.
+2. Translated plus preserved blocks are **more than 90%** of the manifest. Take
+   the number from the build report; never estimate it.
+3. Every page has actually been rendered and reviewed, and the result is readable
+   with layout and key structure intact.
+
+Then:
+
+- Name the file `<original>-<target language>-preview.pdf`, never the final
+  delivery name.
+- State plainly that it is a preview that has not passed final QA, and list the
+  unmet items with their cause.
+- Keep the `job/**` evidence so the work can be resumed.
+- Say what resuming would take.
+
+Never:
+
+- describe a preview as accepted, delivered or verified;
+- use this path when no QA was attempted — it is the exit for *indeterminate
+  items found by QA*, not a way to skip QA;
+- use it for **translation or layout defects** (omissions, overflow, occlusion);
+  those must be fixed before delivery.

@@ -47,13 +47,46 @@ class SkillTests(unittest.TestCase):
         self.assertTrue(np.all(np.asarray(cleaned)[20:41, 20:41] == 255))
 
     def test_dual_scale_merge_deduplicates_same_label(self) -> None:
+        # _ocr_pass always emits rotation/quad, and merge_ocr_records reads rotation.
         records = [
-            {"box": [10, 10, 30, 20], "text": "温度", "score": 0.8, "scale": 1},
-            {"box": [10.5, 10, 30.5, 20], "text": "温度", "score": 0.95, "scale": 3},
+            {"box": [10, 10, 30, 20], "quad": [[10, 10], [30, 10], [30, 20], [10, 20]],
+             "rotation": 0, "text": "温度", "score": 0.8, "scale": 1},
+            {"box": [10.5, 10, 30.5, 20], "quad": [[10.5, 10], [30.5, 10], [30.5, 20], [10.5, 20]],
+             "rotation": 0, "text": "温度", "score": 0.95, "scale": 3},
         ]
         merged = merge_ocr_records(records)
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["score"], 0.95)
+
+    def test_manifest_blocks_undispositioned_candidate(self) -> None:
+        """A detected-but-unresolved candidate must stop the build.
+
+        The extractor flags missed legible lines as ocr_review_candidates, but nothing used to
+        consume that list, so residual source text reached the deliverable and only surfaced in the
+        post-hoc verification re-OCR.
+        """
+        manifest = valid_manifest(Path("fixture.png"))
+        manifest["pages"][0]["ocr_review_candidates"] = [
+            {"id": "p01-c001", "box": [90, 90, 170, 110], "reason": "uncovered_ink",
+             "ocr_attempts": 1},
+        ]
+        with self.assertRaises(ManifestError):
+            validate_manifest(manifest)
+
+    def test_manifest_accepts_dispositioned_or_registered_candidate(self) -> None:
+        manifest = valid_manifest(Path("fixture.png"))
+        manifest["pages"][0]["ocr_review_candidates"] = [
+            {"id": "p01-c001", "box": [90, 90, 170, 110], "reason": "uncovered_ink",
+             "ocr_attempts": 1},
+            {"id": "p01-c002", "box": [20, 20, 60, 30], "reason": "uncovered_ink",
+             "ocr_attempts": 1},
+        ]
+        # c001 is explicitly dispositioned as non-text; c002 is covered by the registered p01-l001
+        # line box, so it needs no separate record.
+        manifest["candidate_dispositions"] = {
+            "p01-c001": {"disposition": "non_text", "note": "rule fragment"},
+        }
+        validate_manifest(manifest)
 
     def test_build_adds_selectable_english_and_preserves_page_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

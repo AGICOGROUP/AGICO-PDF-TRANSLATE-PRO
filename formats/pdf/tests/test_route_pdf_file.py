@@ -121,6 +121,42 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual("engineering-drawing", report["document_kind"])
             self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
 
+    def make_small_cad_sheet_pdf(self, path: Path, paths: int) -> Path:
+        """A4 landscape plot: outlined artwork plus a handful of text characters."""
+        page = canvas.Canvas(str(path), pagesize=(842, 595))
+        page.rect(20, 20, 802, 555)
+        for offset in range(paths):
+            page.line(60, 40 + offset * 1.2, 780, 40 + offset * 1.2)
+        page.drawString(400, 300, "SECTION A-A")
+        page.save()
+        return path
+
+    def test_routes_small_vector_heavy_landscape_sheet_to_native_cad(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_small_cad_sheet_pdf(
+                Path(directory) / "a4-cad.pdf", paths=400
+            )
+            result = self.run_router(source, mode="replace")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("engineering-drawing", report["document_kind"])
+            self.assertIn("sparse_landscape_sheet", report["drawing_evidence"])
+            self.assertIn("vector_heavy_page", report["drawing_evidence"])
+            self.assertEqual(NATIVE_CAD_ADAPTER, report["adapter"])
+            self.assertEqual("replace", report["translation_mode"])
+
+    def test_sparse_landscape_without_vector_artwork_stays_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "a4-letter.pdf"
+            page = canvas.Canvas(str(source), pagesize=(842, 595))
+            page.drawString(400, 300, "SECTION A-A")
+            page.save()
+            result = self.run_router(source, mode="replace")
+            self.assertEqual(0, result.returncode, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual("document", report["document_kind"])
+            self.assertEqual("formats/pdf/native/SKILL.md", report["adapter"])
+
     def test_explicit_replace_routes_mixed_engineering_drawing_to_native_cad(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

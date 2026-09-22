@@ -231,7 +231,7 @@ def review_bundle(source, destination, records, candidate=None, candidate_hash=N
                     name=f'region-{number}'
                     source_display.get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-source.png'))
                     page_artifacts.append(destination/(name+'-source.png'))
-                    body.append('<section><b>'+html.escape(str(record['id']))+'</b><br><code>'+html.escape(record.get('source',''))+' → '+html.escape(record.get('translation',''))+'</code><br>')
+                    body.append('<section><b>'+html.escape(str(record['id']))+'</b><br><code>'+html.escape(record.get('source') or '')+' → '+html.escape(record.get('translation') or '')+'</code><br>')
                     body.append(f'<img loading="lazy" src="{name}-source.png">')
                     if translated:
                         target_display.get_pixmap(matrix=pymupdf.Matrix(2,2),clip=rect,alpha=False).save(destination/(name+'-candidate.png'))

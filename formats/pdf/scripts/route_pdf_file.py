@@ -21,6 +21,13 @@ NATIVE_CAD_ADAPTER = "formats/pdf/native-cad/SKILL.md"
 SCAN_ADAPTER = "formats/pdf/scan/SKILL.md"
 BILINGUAL_ADAPTER = "formats/pdf/bilingual/SKILL.md"
 
+# A4/A3 landscape CAD plots never reach the 1000pt sheet floor below, so a
+# sparse landscape page is confirmed by painted-path density instead.
+SPARSE_LANDSCAPE_MIN_WIDTH = 500.0
+SPARSE_TEXT_CHARS_PER_1000PT2 = 0.20
+DRAWING_PATH_COUNT = 300
+PATH_PROBE_PAGE_LIMIT = 12
+
 
 def report(
     *,
@@ -61,8 +68,51 @@ def report(
     }
 
 
-def classify_document_kind(
+def sparse_landscape_pages(
     page_sizes: list[tuple[float, float]], native_char_counts: list[int]
+) -> list[int]:
+    """Return landscape sheets whose extractable text is too sparse to be prose."""
+    return [
+        index
+        for index, ((width, height), count) in enumerate(
+            zip(page_sizes, native_char_counts), start=1
+        )
+        if width > height
+        and width >= SPARSE_LANDSCAPE_MIN_WIDTH
+        and count / max(width * height / 1000.0, 1.0) <= SPARSE_TEXT_CHARS_PER_1000PT2
+    ]
+
+
+def painted_path_counts(source: Path, page_numbers: list[int]) -> dict[int, int]:
+    """Return painted vector paths per requested page; {} when unavailable.
+
+    Only sparse landscape pages are probed, so ordinary documents pay no cost.
+    Pages beyond ``PATH_PROBE_PAGE_LIMIT`` stay unprobed.
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        return {}
+    wanted = {page for page in page_numbers if page <= PATH_PROBE_PAGE_LIMIT}
+    if not wanted:
+        return {}
+    counts: dict[int, int] = {}
+    try:
+        with pymupdf.open(source) as document:
+            for index, page in enumerate(document, start=1):
+                if index > max(wanted):
+                    break
+                if index in wanted:
+                    counts[index] = len(page.get_drawings())
+    except Exception:
+        return {}
+    return counts
+
+
+def classify_document_kind(
+    page_sizes: list[tuple[float, float]],
+    native_char_counts: list[int],
+    path_counts: dict[int, int] | None = None,
 ) -> tuple[str, list[str]]:
     """Return a fail-safe drawing classification from strong sheet evidence."""
     large_landscape_pages = [
@@ -78,6 +128,17 @@ def classify_document_kind(
     if large_landscape_pages and low_prose_density:
         return "engineering-drawing", [
             "large_landscape_sheet",
+            "low_prose_density",
+        ]
+    if (
+        low_prose_density
+        and path_counts
+        and max(path_counts.values()) >= DRAWING_PATH_COUNT
+        and sparse_landscape_pages(page_sizes, native_char_counts)
+    ):
+        return "engineering-drawing", [
+            "sparse_landscape_sheet",
+            "vector_heavy_page",
             "low_prose_density",
         ]
     image_internal_rotation_candidates = [
@@ -133,7 +194,11 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
     if page_count == 0:
         return 2, report(error="PDF contains no pages")
     native_text_pages = sum(count > 0 for count in counts)
-    document_kind, drawing_evidence = classify_document_kind(page_sizes, counts)
+    document_kind, drawing_evidence = classify_document_kind(
+        page_sizes,
+        counts,
+        painted_path_counts(source, sparse_landscape_pages(page_sizes, counts)),
+    )
     drawing = document_kind == "engineering-drawing"
     if native_text_pages == 0:
         translation_mode = (

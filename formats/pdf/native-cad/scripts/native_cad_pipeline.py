@@ -279,7 +279,7 @@ def validate_packet(
                     and source_record.get('kind') != 'outline'
                     and origin.get('kind') != 'outline'
                     and leader.get('status') == 'translated'
-                    and str(leader.get('translation', '')).strip()
+                    and str(leader.get('translation') or '').strip()
                     and origin.get('page') == source_record['page']
                     and origin.get('rotation') == source_record.get('rotation')
                     and leader.get('layout_box')
@@ -295,14 +295,14 @@ def validate_packet(
         if (translated and translated.get('source') == source_record['source']
                 and translated.get('status') == 'cover_only'
                 and source_record.get('kind') == 'outline'
-                and str(translated.get('target_present', '')).strip()
+                and str(translated.get('target_present') or '').strip()
                 and str(translated.get('review_note', '')).strip()):
             continue
         if (
             translated is None
             or translated.get("source") != source_record["source"]
             or translated.get("status") != "translated"
-            or not str(translated.get("translation", "")).strip()
+            or not str(translated.get("translation") or "").strip()
         ):
             incomplete.append(record_id)
     return supplied, incomplete
@@ -382,6 +382,47 @@ def typography_baselines(records, supplied):
             if (page, 'annotation') in baseline:
                 baseline[(page, 'annotation')] = min(baseline[(page, 'annotation')], max(4, body * .8))
     return baseline
+
+
+LIGHT_PAINT = 0.85
+INK_SUM = 400.0
+HIDDEN_PROBE_DPI = 144
+
+
+def _paint_is_light(path: dict[str, object]) -> bool:
+    """True when replaying the path cannot create visible ink."""
+    colour = path.get("color") or path.get("fill")
+    return bool(colour) and all(channel >= LIGHT_PAINT for channel in colour)
+
+
+def path_hidden_in_source(page: pymupdf.Page, path: dict[str, object],
+                          index: int, cache: dict[int, bool]) -> bool:
+    """True when a dark path leaves no ink in the source render at its own rect.
+
+    ``redraw_paths`` replays paths above all existing content and cannot
+    reproduce source z-order. A dark line that the source hides under a later
+    wide light stroke would reappear as a solid bar once restored, so it must
+    never enter the restore set. Judged inside the path's own rect, never by
+    ink counts attributed to a larger bounding box.
+    """
+    if index in cache:
+        return cache[index]
+    hidden = False
+    if not _paint_is_light(path):
+        rect = pymupdf.Rect(path["rect"])
+        if rect.is_empty:
+            rect = pymupdf.Rect(rect.x0 - 0.5, rect.y0 - 0.5, rect.x1 + 0.5, rect.y1 + 0.5)
+        probe = rect + (-1.5, -1.5, 1.5, 1.5) & page.rect
+        if not probe.is_empty:
+            pix = page.get_pixmap(dpi=HIDDEN_PROBE_DPI, clip=probe)
+            samples = pix.samples
+            step = max(1, (len(samples) // 3) // 900)
+            hidden = not any(
+                samples[i] + samples[i + 1] + samples[i + 2] < INK_SUM
+                for i in range(0, len(samples) - 2, 3 * step)
+            )
+    cache[index] = hidden
+    return hidden
 
 
 def redraw_paths(page: pymupdf.Page, paths: list[dict[str, object]]) -> None:
@@ -502,6 +543,7 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         by_page.setdefault(int(record["page"]), []).append(record)
     unsafe = []
     restore_by_page: dict[int, set[int]] = {}
+    hidden_path_cache: dict[int, dict[int, bool]] = {}
     drawings_by_page = {}
     for page_index, records in by_page.items():
         drawings = drawing_index(document[page_index]) if any(r.get('kind') == 'outline' for r in records) else []
@@ -546,10 +588,17 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                 reasons.append('source_pixel_review_required')
             restorable = {'crossing_path', 'symbol_or_frame', 'filled_region', 'curve'}
             if reasons and review.get('restore_conflicting_paths') is True and all(reason.split(':')[0] in restorable for reason in reasons):
-                restore_by_page.setdefault(page_index, set()).update(
-                    int(reason.split(':')[1]) for reason in reasons
-                )
-                reasons = []
+                queued = sorted({int(reason.split(':')[1]) for reason in reasons})
+                cache = hidden_path_cache.setdefault(page_index, {})
+                hidden = [index for index in queued
+                          if path_hidden_in_source(document[page_index],
+                                                   drawings['paths'][index], index, cache)]
+                if hidden:
+                    reasons = ['restore_would_resurrect_hidden_path:{0}'.format(index)
+                               for index in hidden]
+                else:
+                    restore_by_page.setdefault(page_index, set()).update(queued)
+                    reasons = []
             if reasons:
                 unsafe.append({'id': record['id'], 'reasons': reasons})
     if unsafe:

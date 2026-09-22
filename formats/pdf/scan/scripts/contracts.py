@@ -99,6 +99,64 @@ def _validate_rich_lines(block: dict, page: dict) -> None:
         raise ManifestError(f"block {block_id} rich text runs do not match translation")
 
 
+# A candidate is terminal once it has been dispositioned, or once a registered source line covers
+# its ink (the recovered case). Anything else must stop the build.
+TERMINAL_CANDIDATE_DISPOSITIONS = {"recovered", "non_text", "illegible", "preserved"}
+
+
+def _covered_fraction(inner: list, outer: list) -> float:
+    x0 = max(float(inner[0]), float(outer[0]))
+    y0 = max(float(inner[1]), float(outer[1]))
+    x1 = min(float(inner[2]), float(outer[2]))
+    y1 = min(float(inner[3]), float(outer[3]))
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    area = max((float(inner[2]) - float(inner[0])) * (float(inner[3]) - float(inner[1])), 1e-9)
+    return (x1 - x0) * (y1 - y0) / area
+
+
+def unresolved_scan_candidates(manifest: dict) -> list:
+    """Candidate IDs whose ink is neither dispositioned nor covered by a registered line."""
+    dispositions = manifest.get("candidate_dispositions") or {}
+    if not isinstance(dispositions, dict):
+        raise ManifestError("candidate_dispositions must be an object keyed by candidate ID")
+    selected = set(manifest.get("selected_pages", []))
+    lines = manifest.get("source_lines", [])
+    pending: list = []
+    for page in manifest.get("pages", []):
+        number = page.get("source_page")
+        if selected and number not in selected:
+            continue
+        page_boxes = [line["box"] for line in lines
+                      if line.get("page") == number and isinstance(line.get("box"), list)]
+        for candidate in page.get("ocr_review_candidates", []) or []:
+            cid = candidate.get("id")
+            record = dispositions.get(cid)
+            if isinstance(record, dict) and record.get("disposition") in \
+                    TERMINAL_CANDIDATE_DISPOSITIONS:
+                # A recovered label only counts once its text is actually in the inventory;
+                # otherwise the disposition would wave the line through untranslated.
+                if record.get("disposition") == "recovered":
+                    # A candidate band can hold more text than the single row the crop pass
+                    # returned. Accepting a match on that row's text alone let a partially
+                    # recovered label through the gate, so require the whole band to be covered
+                    # by registered source lines instead.
+                    page_lines = [line for line in lines if line.get("page") == number
+                                  and isinstance(line.get("box"), list)]
+                    covered = any(_covered_fraction(candidate["box"], line["box"]) >= 0.8
+                                  for line in page_lines)
+                    if not covered:
+                        pending.append(cid if cid else f"page {number} recovered")
+                        continue
+                continue
+            box = candidate.get("box")
+            if isinstance(box, list) and len(box) == 4 and any(
+                    _covered_fraction(box, other) >= 0.8 for other in page_boxes):
+                continue
+            pending.append(cid if cid else f"page {number} box {box}")
+    return pending
+
+
 def validate_manifest(manifest: dict) -> dict:
     source_lines = manifest.get("source_lines", [])
     blocks = manifest.get("blocks", [])
@@ -138,6 +196,16 @@ def validate_manifest(manifest: dict) -> dict:
                 raise ManifestError(
                     f"page {page_number} invalid layout adjustment: {exc}"
                 ) from exc
+    pending = unresolved_scan_candidates(manifest)
+    if pending:
+        shown = ", ".join(str(item) for item in pending[:12])
+        more = f" (+{len(pending) - 12} more)" if len(pending) > 12 else ""
+        raise ManifestError(
+            f"unresolved OCR review candidates: {shown}{more}; run "
+            "scripts/resolve_scan_candidates.py and record a disposition for each so a missed "
+            "but legible line cannot survive into the deliverable"
+        )
+
     assignments: list[str] = []
     translated_count = 0
     preserve_count = 0
