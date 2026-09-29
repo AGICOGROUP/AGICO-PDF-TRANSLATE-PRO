@@ -64,6 +64,31 @@ def test_shared_cell_fields_receive_separate_layouts():
         assert proposals['a']['layout_box'][3] <= proposals['b']['layout_box'][1]
 
 
+def test_native_value_ocr_duplicate_does_not_collapse_layout():
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=400, height=200)
+        page.draw_rect([20, 20, 300, 60])
+        value = dict(id='value', bbox=[100, 32, 115, 48], kind='native')
+        duplicate = dict(id='ocr', bbox=[99, 31, 116, 49], kind='outline')
+        proposals = cell_proposals(page, [value, duplicate])
+        assert proposals['value']['layout_box'] == [21.5, 21.5, 298.5, 58.5]
+        assert proposals['value']['members'] == ['value', 'ocr']
+        assert 'cover_boxes' not in proposals['value']
+        unit = dict(id='unit', bbox=[200, 32, 230, 48], kind='native')
+        proposals = cell_proposals(page, [value, duplicate, unit])
+        assert proposals['value']['layout_box'][2] <= proposals['unit']['layout_box'][0]
+
+
+def test_distinct_outline_description_still_reserves_its_space():
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=400, height=200)
+        page.draw_rect([20, 20, 300, 60])
+        records = [dict(id='native', bbox=[30, 32, 65, 48], kind='native'),
+                   dict(id='outline', bbox=[100, 32, 220, 48], kind='outline')]
+        proposals = cell_proposals(page, records)
+        assert proposals['native']['layout_box'][2] < 100
+
+
 def test_image_structure_ignores_unused_resources_but_detects_moved_image(tmp_path):
     import native_cad_pipeline as cad
     with pymupdf.open() as doc:

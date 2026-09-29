@@ -215,6 +215,11 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto', *,
                 "kind": record.get('kind', 'native'),
                 "role": 'body',
                 **({'placement_proposal': placement[record['id']]} if record['id'] in placement else {}),
+                **({'layout_box': placement[record['id']]['layout_box']}
+                   if (record.get('kind') != 'outline' and record['id'] in placement
+                       and not placement[record['id']]['source_overflows_cell']
+                       and pymupdf.Rect(placement[record['id']]['layout_box']).contains(
+                           pymupdf.Rect(record['bbox']))) else {}),
                 **({'rotation': record['rotation']} if record.get('kind') == 'outline' else {}),
                 **({'cover_review': {'approved': False, 'text_only': False, 'white_background': False, 'note': ''}} if record.get('kind') == 'outline' else {}),
             }

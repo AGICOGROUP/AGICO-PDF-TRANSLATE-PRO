@@ -58,8 +58,16 @@ def propose_units(inventory):
         for r in group[1:]:
             box |= pymupdf.Rect(r['bbox'])
         cell = placements.get(first['id'], {}).get('cell_bbox')
-        # The source envelope is the conservative proposal. Wider reflow is an
-        # explicit reviewed adjustment, not automatic use of a shared cell.
+        # A single native field already has a neighbour-reserving cell proposal.
+        # Its source glyph bounds needlessly shrink short values after CJK font
+        # substitution. Merged phrases still need reviewed group whitespace.
+        placement = placements.get(first['id'], {})
+        if (len(group) == 1 and first.get('kind', 'native') == 'native'
+                and not placement.get('source_overflows_cell')
+                and placement.get('layout_box')):
+            proposed = pymupdf.Rect(placement['layout_box'])
+            if proposed.contains(box):
+                box = proposed
         units.append({'id': 'u-' + hashlib.sha256('|'.join(ids).encode()).hexdigest()[:12],
                       'page': first['page'], 'member_ids': ids,
                       'source': ' '.join(r['source'] for r in group),

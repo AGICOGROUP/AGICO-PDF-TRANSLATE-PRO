@@ -72,6 +72,13 @@ def cell_proposals(page, records):
                 if other['id'] not in members or other['id'] == record['id']:
                     continue
                 neighbour = pymupdf.Rect(other['bbox'])
+                # OCR of existing native glyphs is not a second layout field.
+                # Keep its inventory/cover review unchanged, but do not let it
+                # reduce a native value or list marker to its tiny source box.
+                if (record.get('kind', 'native') == 'native'
+                        and other.get('kind') == 'outline'
+                        and (rect & neighbour).get_area() / max(neighbour.get_area(), 1e-6) > .7):
+                    continue
                 if rect.intersects(neighbour):
                     layout = rect & inner
                     break

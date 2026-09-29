@@ -114,6 +114,9 @@ placement_proposal supplies cell_bbox, inset layout_box, all members and
 source_overflows_cell. It is a proposal, not approval:
 
 - For a reviewed text-only description cell, use its inset box for layout.
+  Native single fields start with the prepared neighbour-reserving box when
+  it contains their source bounds; the packet records this box for review.
+  Overlapping OCR duplicates must not reduce that field to its glyph bounds.
   When both languages touch, replace the complete description once. Never
   estimate a script boundary from character counts: it clips English letters.
 - Inspect all members first. Identifiers, numbers and separate fields stay
@@ -168,7 +171,15 @@ layout_box for reviewed adjustments. Visual replacement is not secure deletion.
 
 Use consistent semantic roles: title, body (including ordinary table text),
 annotation. One page/role baseline applies, title > body > annotation; only
-a whole overflowing paragraph shrinks. Prefer safe whitespace before shrinking.
+a whole overflowing paragraph shrinks after using its reviewed safe whitespace.
+For a merged paragraph or bullet item, choose a box covering the complete group's
+available space, not the leader span or bullet glyph. For tables, use the same
+available row height for equivalent fields while reserving separate values,
+units and neighbouring cells. Do not use the measured text bounds as the layout
+box when safe cell space is available. Inspect every shrink exception in
+apply-report.json: repair avoidably narrow/short boxes before accepting smaller
+type; retain a reduction only for genuine full-text overflow. Keep source role
+hierarchy rather than forcing titles, body and small annotations to one size.
 OCR box height is an estimate, not a calibrated font size. Inspect
 native CAD labels for text-matrix scaling: an implausibly tiny reported size
 with a much taller visible line uses a line-height estimate in apply. Assign

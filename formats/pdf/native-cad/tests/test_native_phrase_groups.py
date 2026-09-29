@@ -58,6 +58,34 @@ def test_normal_font_and_outline_height_do_not_inflate_baseline():
         assert cad.typography_baselines([record], {'a': {'role': 'body'}})[(0,'body')] == 10
 
 
+def test_prepared_cell_space_keeps_equivalent_fields_at_baseline(tmp_path):
+    source = tmp_path / 'table.pdf'
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=400, height=200)
+        page.draw_rect([20, 20, 300, 60])
+        page.draw_line((160, 20), (160, 60))
+        page.insert_text((30, 45), 'Frequency', fontsize=12)
+        page.insert_text((200, 45), 'Value', fontsize=12)
+        doc.save(source)
+    job = tmp_path / 'job'
+    assert cad.prepare(source, job, ocr='never') == 0
+    packet = cad.read_json(job / cad.PACKET_NAME)
+    for record, text in zip(packet['records'], ['频率', '50']):
+        record.update(status='translated', translation=text)
+        assert pymupdf.Rect(record['layout_box']).height > pymupdf.Rect(record['bbox']).height
+    cad.write_json(job / cad.PACKET_NAME, packet)
+    font = cad.DEFAULT_FONT.parent / 'ARIALUNI.TTF'
+    if not font.exists():
+        pytest.skip('Arial Unicode MS required for the reported font-substitution regression')
+    assert cad.apply(job, job / cad.PACKET_NAME, font) == 0
+    report = cad.read_json(job / cad.APPLY_REPORT_NAME)
+    assert all(r['font_size'] == pytest.approx(12) for r in report['applied_records'])
+    assert all(r['shrink_reason'] is None for r in report['applied_records'])
+    with pymupdf.open(job / cad.OUTPUT_NAME) as doc:
+        assert '频率' in doc[0].get_text() and '50' in doc[0].get_text()
+        assert len(doc[0].get_drawings()) == 2
+
+
 @pytest.mark.parametrize('box', [
     [500, 300, 700, 350], [30, 35, 500, 60], [30, 35, 30, 60],
     [200, 60, 30, 35], [30, 35, float('nan'), 60], [30, 35, float('inf'), 60],
