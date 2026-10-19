@@ -10,3 +10,7 @@ It supports three input types and one optional PDF output mode:
 - Optional bilingual PDF overlay: keeps the original text visible and adds Chinese translation beside it in the surrounding whitespace.
 
 The root `SKILL.md` is the single entry point. It routes images to `formats/image/` and classifies PDFs before invoking exactly one adapter under `formats/pdf/`.
+
+## Developer
+
+[Dennis-pan-x](https://github.com/Dennis-pan-x)
