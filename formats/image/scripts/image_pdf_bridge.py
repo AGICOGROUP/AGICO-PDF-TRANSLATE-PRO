@@ -106,7 +106,7 @@ def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path) -> Non
         raise BridgeError("Official scan build report is required before image unwrap")
     build_report = json.loads(build_report_path.read_text(encoding="utf-8"))
     if (
-        build_report.get("builder") != "translate-scan-pdf-professionally"
+        build_report.get("builder") != "PDF-TRANSLATE-PRO-SCAN"
         or str(build_report.get("output_sha256", "")).lower() != sha256_file(translated_pdf).lower()
     ):
         raise BridgeError("Official scan build report does not match translated PDF")

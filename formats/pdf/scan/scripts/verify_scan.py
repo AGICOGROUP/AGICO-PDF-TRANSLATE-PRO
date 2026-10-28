@@ -24,7 +24,7 @@ def requires_cjk_residual_gate(target_language: str) -> bool:
     """CJK is source residue only when the requested output is non-CJK."""
     language = str(target_language or "").lower().replace("_", "-")
     return not language.startswith(("zh", "ja", "ko"))
-OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
+OFFICIAL_BUILDER = "PDF-TRANSLATE-PRO-SCAN"
 
 
 def sha256_file(path: Path) -> str:

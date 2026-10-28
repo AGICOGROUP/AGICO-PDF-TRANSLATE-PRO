@@ -61,7 +61,7 @@ class ImagePdfBridgeTests(unittest.TestCase):
             metadata = root / "image-metadata.json"
             self.assertEqual(0, self.run_bridge("wrap", str(source), str(pdf), str(metadata)).returncode)
             pdf.with_suffix(".build-report.json").write_text(json.dumps({
-                "builder": "translate-scan-pdf-professionally",
+                "builder": "PDF-TRANSLATE-PRO-SCAN",
                 "output_sha256": __import__("hashlib").sha256(pdf.read_bytes()).hexdigest(),
             }), encoding="utf-8")
 
@@ -95,7 +95,7 @@ class ImagePdfBridgeTests(unittest.TestCase):
             metadata = root / "image-metadata.json"
             self.assertEqual(0, self.run_bridge("wrap", str(source), str(pdf), str(metadata)).returncode)
             pdf.with_suffix(".build-report.json").write_text(json.dumps({
-                "builder": "translate-scan-pdf-professionally",
+                "builder": "PDF-TRANSLATE-PRO-SCAN",
                 "output_sha256": __import__("hashlib").sha256(pdf.read_bytes()).hexdigest(),
             }), encoding="utf-8")
 

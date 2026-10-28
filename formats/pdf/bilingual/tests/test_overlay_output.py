@@ -72,7 +72,7 @@ class BilingualOverlayOutputTests(unittest.TestCase):
             self.assertAlmostEqual(0.0, translated_line["dir"][0], places=2)
             self.assertAlmostEqual(-1.0, translated_line["dir"][1], places=2)
             report = json.loads(output.with_suffix(".build-report.json").read_text(encoding="utf-8"))
-            self.assertEqual("translate-pdf-bilingual-overlay", report["builder"])
+            self.assertEqual("PDF-TRANSLATE-PRO-BILINGUAL", report["builder"])
             self.assertEqual(1, report["mapped_source_count"])
 
     def test_rejects_unmapped_or_duplicate_source_records(self) -> None:

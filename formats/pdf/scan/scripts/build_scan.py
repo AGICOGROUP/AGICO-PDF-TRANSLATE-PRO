@@ -29,7 +29,7 @@ KOREAN_REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\malgun.ttf"), *CJK_REGULAR_
 KOREAN_BOLD_FONT_PATHS = [Path(r"C:\Windows\Fonts\malgunbd.ttf"), *CJK_BOLD_FONT_PATHS]
 REGULAR_FONT = "ScanTranslation-Regular"
 BOLD_FONT = "ScanTranslation-Bold"
-OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
+OFFICIAL_BUILDER = "PDF-TRANSLATE-PRO-SCAN"
 ROLE_DEFAULTS = {
     "title": (18, 11), "subtitle": (15, 10), "heading": (16, 10),
     "subheading": (14, 9), "body": (10, 6), "list_item": (10, 6),

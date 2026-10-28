@@ -7,7 +7,7 @@ invoke another adapter's verifier or add a separate rendering/OCR pipeline.
 ## Translate with page context
 
 For cement/process/equipment terminology, consult the user-revised
-[Chinese-English table](../formats/pdf/scan/references/cement-terminology.md)
+[Chinese-English table 2.0](../formats/pdf/scan/references/cement-terminology.md)
 before translating relevant passages in every adapter, including bilingual,
 native-CAD and standalone images. Native PDF bundles the same table locally.
 From the repository root, use `python formats/pdf/scan/scripts/glossary_lookup.py

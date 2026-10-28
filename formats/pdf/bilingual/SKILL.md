@@ -217,7 +217,7 @@ Use these checks as evidence:
 5. Translations use an embedded font supporting the target language — no missing-glyph boxes.
 6. Minor font-size, weight and alignment differences are warnings when readable.
 7. Numbers, units, standards, and model codes are preserved untranslated.
-8. The build report identifies `translate-pdf-bilingual-overlay`, binds source,
+8. The build report identifies `PDF-TRANSLATE-PRO-BILINGUAL`, binds source,
    translation packet, and output hashes, and changed-region review passes.
 
 ## Failure policy

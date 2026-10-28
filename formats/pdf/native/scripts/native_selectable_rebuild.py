@@ -885,7 +885,9 @@ def build_table_cell_render_plan(
                         if interval is not None and not local_column
                         else (cell[0], cell[2])
                     )
-                    cell_box = [left + 3, cell[1] + 2, right - 3, cell[3] - 2]
+                    # Use the same inset as source-bound cells so their
+                    # continuations aggregate into one physical-cell flow.
+                    cell_box = [left + 2, cell[1] + 0.25, right - 2, cell[3] - 0.25]
                 color = tuple(
                     pipeline.source_line_color(
                         line,

@@ -238,7 +238,7 @@ def check(source, job, output):
         failures.append('source_hash_mismatch')
     if build_report.get('output_sha256') != sha256_file(job / 'output/translated.pdf'):
         failures.append('stale_build_report')
-    if build_report.get('builder') != 'translate-scan-pdf-professionally':
+    if build_report.get('builder') != 'PDF-TRANSLATE-PRO-SCAN':
         failures.append('unofficial_builder')
     if manifest['source_sha256'] != sha256_file(job / 'source.pdf'):
         failures.append('carrier_hash_mismatch')

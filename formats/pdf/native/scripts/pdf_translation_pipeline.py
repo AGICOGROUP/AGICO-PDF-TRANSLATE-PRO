@@ -1043,7 +1043,7 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
             die("Manifest page count does not match the source PDF.")
         for page_info, page in zip(manifest["pages"], document.pages):
             detected_table_cells = page_table_cells(page)
-            table_cells = detected_table_cells or page_info.get("table_cells", [])
+            table_cells = page_info.get("reviewed_table_cells") or detected_table_cells or page_info.get("table_cells", [])
             page_info["table_cells"] = table_cells
             page_info["image_boxes"] = page_image_boxes(page)
             raw_lines = page.extract_text_lines(strip=True, return_chars=True) or []

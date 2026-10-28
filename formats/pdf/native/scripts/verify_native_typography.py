@@ -45,11 +45,17 @@ def bound_cell_failures(source_blocks, rebuild, pipeline):
         reason = None
         if len(draws) != 1:
             reason = 'cell must be rendered exactly once'
-        elif canonical(draws[0].get('rendered', '')) != canonical(pipeline.prepared_translation(block)):
-            reason = 'rendered cell text differs from its translation'
         else:
+            expected = canonical(pipeline.prepared_translation(block))
+            rendered = canonical(draws[0].get('rendered', ''))
+            owners = draws[0].get('block_ids', [block_id])
+            # A merged cell contains several source blocks. Each block's
+            # complete wording must be retained within that one cell draw.
+            text_matches = expected in rendered if len(owners) > 1 else expected == rendered
             boxes = draws[0].get('drawn_boxes', [])
-            if not boxes:
+            if not text_matches:
+                reason = 'rendered cell text differs from its translation'
+            elif not boxes:
                 reason = 'missing cell line geometry'
             elif any(b[0] < cell[0] - 0.5 or b[1] < cell[1] - 0.5
                      or b[2] > cell[2] + 0.5 or b[3] > cell[3] + 0.5 for b in boxes):

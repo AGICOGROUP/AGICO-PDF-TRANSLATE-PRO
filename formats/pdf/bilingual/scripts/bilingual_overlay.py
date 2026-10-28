@@ -225,7 +225,7 @@ def main() -> int:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     build_report = {
-        "builder": "translate-pdf-bilingual-overlay",
+        "builder": "PDF-TRANSLATE-PRO-BILINGUAL",
         "source_sha256": digest(args.source),
         "translations_sha256": digest(args.translations),
         "output_sha256": digest(args.output),
