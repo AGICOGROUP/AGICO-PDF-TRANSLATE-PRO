@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 from collections import Counter
@@ -25,6 +26,10 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ContentStream, NameObject
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from glossary_lookup import parse_glossary, page_terms
 
 
 SCHEMA_VERSION = 2
@@ -937,28 +942,43 @@ def manifest_blocks(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def apply_translation_records(manifest: dict, payload: dict, records: list, allow_cjk: bool) -> int:
+    """Validate a complete submitted batch before changing any target block."""
+    if payload.get("source_sha256") != manifest.get("source_sha256"):
+        die("Translation packet source hash does not match manifest.")
+    for key in ("source_language", "target_language"):
+        if payload.get(key) is not None and payload[key] != manifest.get(key):
+            die(f"Translation packet {key} differs from manifest.")
+    destination = manifest_blocks(manifest)
+    code = str(manifest.get("target_language", "")).casefold().replace("_", "-").split("-")[0]
+    changes = {}
+    for record in records:
+        block_id = record.get("id")
+        if block_id not in destination:
+            die(f"Unknown block ID: {block_id}")
+        if block_id in changes:
+            die(f"Duplicate translation block ID: {block_id}")
+        if destination[block_id]["source_text"] != record.get("source_text"):
+            die(f"Source text changed for block: {block_id}")
+        if not isinstance(record.get("translation"), str):
+            die(f"Translation must be text for block: {block_id}")
+        translation = normalize_text(record["translation"])
+        if not translation:
+            die(f"Blank translation for block: {block_id}")
+        if cjk_count(translation) and code not in {"zh", "ja"} and not allow_cjk:
+            die(f"Unexpected CJK residue in translation: {block_id}")
+        changes[block_id] = translation
+    for block_id, translation in changes.items():
+        destination[block_id]["translation"] = translation
+    return len(changes)
+
+
 def merge_command(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest)
     manifest = read_json(manifest_path)
     batch = read_json(Path(args.batch))
-    if manifest["source_sha256"] != batch.get("source_sha256"):
-        die("Batch source hash does not match manifest.")
-    destination = manifest_blocks(manifest)
-    merged = 0
-    for page in batch.get("pages", []):
-        for block in page.get("blocks", []):
-            block_id = block.get("id")
-            if block_id not in destination:
-                die(f"Unknown block ID: {block_id}")
-            if destination[block_id]["source_text"] != block.get("source_text"):
-                die(f"Source text changed for block: {block_id}")
-            translation = normalize_text(str(block.get("translation", "")))
-            if not translation:
-                die(f"Blank translation for block: {block_id}")
-            if cjk_count(translation) and not args.allow_cjk:
-                die(f"Unexpected CJK residue in translation: {block_id}")
-            destination[block_id]["translation"] = translation
-            merged += 1
+    records = [block for page in batch.get("pages", []) for block in page.get("blocks", [])]
+    merged = apply_translation_records(manifest, batch, records, args.allow_cjk)
     write_json(manifest_path, manifest)
     print(json.dumps({"merged_blocks": merged}, ensure_ascii=False))
 
@@ -981,8 +1001,14 @@ def status_command(args: argparse.Namespace) -> None:
 def export_translation_command(args: argparse.Namespace) -> None:
     manifest = read_json(Path(args.manifest))
     records: list[dict[str, Any]] = []
+    pages = []
+    terms, _ = parse_glossary(Path(__file__).resolve().parents[1] / "references/cement-terminology.md")
     for page in manifest["pages"]:
         blocks = page.get("blocks", [])
+        context = "\n".join(block["source_text"] for block in blocks)
+        pages.append({"page": page["page"], "page_context": context,
+                      "ordered_source_ids": [b["id"] for b in blocks],
+                      "terminology": page_terms(context, terms)})
         for index, block in enumerate(blocks):
             records.append(
                 {
@@ -998,7 +1024,10 @@ def export_translation_command(args: argparse.Namespace) -> None:
             )
     write_json(
         Path(args.output),
-        {"source_sha256": manifest["source_sha256"], "records": records},
+        {"source_sha256": manifest["source_sha256"],
+         "source_language": manifest.get("source_language"),
+         "target_language": manifest.get("target_language"),
+         "pages": pages, "records": records},
     )
     print(json.dumps({"records": len(records), "output": str(Path(args.output).resolve())}, ensure_ascii=False))
 
@@ -1007,23 +1036,7 @@ def merge_translation_command(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest)
     manifest = read_json(manifest_path)
     packet = read_json(Path(args.packet))
-    if packet.get("source_sha256") != manifest.get("source_sha256"):
-        die("Translation packet source hash does not match manifest.")
-    destination = manifest_blocks(manifest)
-    merged = 0
-    for record in packet.get("records", []):
-        block_id = record.get("id")
-        if block_id not in destination:
-            die(f"Unknown block ID: {block_id}")
-        if destination[block_id]["source_text"] != record.get("source_text"):
-            die(f"Source text changed for block: {block_id}")
-        translation = normalize_text(str(record.get("translation", "")))
-        if not translation:
-            die(f"Blank translation for block: {block_id}")
-        if cjk_count(translation) and not args.allow_cjk:
-            die(f"Unexpected CJK residue in translation: {block_id}")
-        destination[block_id]["translation"] = translation
-        merged += 1
+    merged = apply_translation_records(manifest, packet, packet.get("records", []), args.allow_cjk)
     write_json(manifest_path, manifest)
     print(json.dumps({"merged_blocks": merged}, ensure_ascii=False))
 

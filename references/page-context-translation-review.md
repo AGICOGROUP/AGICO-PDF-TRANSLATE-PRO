@@ -10,12 +10,15 @@ For cement/process/equipment terminology, consult the user-revised
 [Chinese-English table 2.0](../formats/pdf/scan/references/cement-terminology.md)
 before translating relevant passages in every adapter, including bilingual,
 native-CAD and standalone images. Native PDF bundles the same table locally.
-From the repository root, use `python formats/pdf/scan/scripts/glossary_lookup.py
-scan "<Chinese source passage>"` or `lookup "<Chinese term>"`. The helper indexes
-Chinese only: for English source, search the table's English column directly;
-for other languages, establish the concept from source context, then consult
-the corresponding Chinese-English entry. A missing Chinese match does not prove
-that an English or other-language term is absent.
+From the repository root use `python formats/pdf/scan/scripts/glossary_lookup.py
+scan "<Chinese source passage>"` or `lookup "<Chinese term>"`. For English source,
+add `--source-language en` to lookup or scan; preferred terms and declared aliases
+are matched as complete words/phrases and all matching senses retain context.
+A reverse match is a candidate meaning, not permission to force a translation.
+For other languages establish the concept from the source, then consult the
+corresponding Chinese-English entry. A missing match does not prove absence in
+another language. The 2.0 table's Word supplements and pending-review notes keep
+their uncertainty: they are not all professionally verified synonyms.
 
 Prefer the table's equivalent over model wording when the full phrase and
 engineering sense match. Consider returned alternatives in context; longest

@@ -25,6 +25,27 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def ocr_runtime_signature() -> dict:
+    """Bind checkpoints to the configured OCR assets without loading ONNX."""
+    import rapidocr_onnxruntime
+    import yaml
+    import ocr_language_guard
+
+    root = Path(rapidocr_onnxruntime.__file__).resolve().parent
+    config_path = root / 'config.yaml'
+    config_bytes = config_path.read_bytes()
+    config = yaml.safe_load(config_bytes)
+    models = {}
+    flags = {'Det': 'use_text_det', 'Cls': 'use_angle_cls'}
+    for component in ('Det', 'Cls', 'Rec'):
+        if component in flags and not config.get('Global', {}).get(flags[component], True):
+            continue
+        selected = (root / config[component]['model_path']).resolve()
+        models[component] = {'path': str(selected), 'sha256': sha256_file(selected)}
+    return {'config_path': str(config_path), 'config_sha256': hashlib.sha256(config_bytes).hexdigest(),
+            'models': models, 'language_guard_sha256': sha256_file(Path(ocr_language_guard.__file__))}
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from poppler import find_pdftoppm, lookup_warning  # noqa: E402
 
@@ -270,6 +291,8 @@ def extract_selected_pages(
     ocr_scales: tuple[float, ...] = (1.0,),
 ) -> dict:
     started = time.perf_counter()
+    if not 1 <= len(ocr_scales) <= 2 or any(not math.isfinite(scale) or scale <= 0 for scale in ocr_scales):
+        raise ValueError('OCR scales must contain one or two finite positive scales')
     source_path = Path(source).resolve()
     output_path = Path(output_dir).resolve()
     output_path.mkdir(parents=True, exist_ok=True)
@@ -295,13 +318,14 @@ def extract_selected_pages(
         ocr_version = version("rapidocr-onnxruntime")
     except PackageNotFoundError:
         ocr_version = "unavailable"
+    runtime_signature = ocr_runtime_signature() if run_ocr else None
     engine = None
     source_lines = []
     for page_number in pages:
         page_started = time.perf_counter()
         key = {"source": actual_hash, "page": page_number, "dpi": dpi,
                "implementation": implementation, "ocr_version": ocr_version,
-               "scales": list(ocr_scales), "run_ocr": run_ocr}
+               "ocr_runtime": runtime_signature, "scales": list(ocr_scales), "run_ocr": run_ocr}
         checkpoint = cache_path / f"page-{page_number:04d}.json"
         cached = None
         if resume and checkpoint.exists():
@@ -382,6 +406,16 @@ def extract_selected_pages(
                     }
                 )
             image.close()
+        else:
+            # Explicit visual-transcription preparation: no recognizer import,
+            # no inferred text, and no claim that the ink inventory is complete.
+            page_record.update(recognition_skipped=True, reading_method='visual_required')
+            with Image.open(page_record['render_path']) as loaded:
+                candidates = uncovered_text_candidates(loaded, [])
+            page_record['ocr_review_candidates'] = [
+                {'id': f'p{page_number:02d}-c{i:03d}', 'box': box, 'reason': 'uncovered_ink',
+                 'ocr_attempts': 0, 'review_required': True}
+                for i, box in enumerate(candidates, 1)]
         source_lines.extend(lines)
         page_record["ocr_cache_hit"] = False
         page_record["elapsed_seconds"] = round(time.perf_counter() - page_started, 3)
@@ -399,6 +433,8 @@ def extract_selected_pages(
         "source_lines": source_lines,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
+    if not run_ocr:
+        report.update(recognition_skipped=True, reading_method='visual_required')
     (output_path / "extraction-report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -412,6 +448,8 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--dpi", type=int, default=400)
     parser.add_argument("--no-resume", action="store_true", help="Ignore page checkpoints")
+    parser.add_argument("--no-ocr", action="store_true",
+                        help="Render source pages for visual transcription; recognition is skipped and review remains required")
     parser.add_argument("--dual-scale", action="store_true", help="Retry selected uncertain pages at 1x and 3x")
     args = parser.parse_args()
     reader = PdfReader(str(Path(args.source).resolve()))
@@ -421,6 +459,7 @@ def main() -> None:
         else [int(value) for value in args.pages.split(",") if value.strip()]
     )
     report = extract_selected_pages(args.source, pages, args.output, dpi=args.dpi, resume=not args.no_resume,
+                                    run_ocr=not args.no_ocr,
                                     ocr_scales=(1.0, 3.0) if args.dual_scale else (1.0,))
     print(
         json.dumps(
@@ -428,6 +467,7 @@ def main() -> None:
                 "pages": len(report["pages"]),
                 "ocr_lines": len(report["source_lines"]),
                 "output": str(Path(args.output).resolve()),
+                **({'recognition_skipped': True, 'reading_method': 'visual_required'} if args.no_ocr else {}),
             },
             ensure_ascii=False,
         )

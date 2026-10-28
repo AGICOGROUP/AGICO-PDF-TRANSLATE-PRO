@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+from io import BytesIO
 import json
 import math
 from pathlib import Path
@@ -9,11 +11,14 @@ import subprocess
 import sys
 import time
 import re
+import os
+import tempfile
 
 import numpy as np
 from PIL import Image, ImageOps
 
-from image_pdf_bridge import wrap, unwrap, sha256_file
+from image_pdf_bridge import (wrap, unwrap, sha256_file, same_path,
+                              save_image_atomic, expected_format, JPEG_OPTIONS)
 
 ROOT = Path(__file__).resolve().parents[3]
 SCAN = ROOT / 'formats/pdf/scan/scripts'
@@ -25,7 +30,14 @@ def read(path):
 
 def save(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    handle, name = tempfile.mkstemp(prefix=f'.{path.stem}-', suffix='.json', dir=path.parent)
+    os.close(handle)
+    temporary = Path(name)
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def run(script, *args):
@@ -46,15 +58,22 @@ def print_inventory(extraction, metadata):
     page = extraction['pages'][0]
     sx = metadata['pixel_size'][0] / page['pixel_width']
     sy = metadata['pixel_size'][1] / page['pixel_height']
+    if extraction.get('recognition_skipped'):
+        print(json.dumps({'recognition_skipped': True, 'reading_method': 'visual_required'}))
+        print('Visual transcription required: supply located TSV supplements and resolve ink candidates; '
+              'an empty OCR inventory does not establish that the image has no text.')
     print('Line\tBox (original image pixels)\tSource text')
     for line in extraction['source_lines']:
         box = [round(v*s) for v,s in zip(line['box'],(sx,sy,sx,sy))]
         print(f"{line['id'].split('-l')[-1]}\t{','.join(map(str,box))}\t{line['text']}")
 
 
-def prepare(source, job, target, dpi):
-    if (job / 'source.pdf').exists():
+def prepare(source, job, target, dpi, *, run_ocr=True):
+    if job.exists() and (not job.is_dir() or any(job.iterdir())):
         raise ValueError('Fresh preparation requires a new job directory')
+    image_ocr_scale((1, 1), dpi)
+    if same_path(source, job):
+        raise ValueError('Source and job directory must be distinct')
     run(ROOT / 'formats/pdf/scripts/session_metrics.py', 'start', '--job', job,
         '--source', source, '--target-language', target, '--mode', 'replace', '--pages', 1,
         '--budget-per-page', 180)
@@ -64,6 +83,7 @@ def prepare(source, job, target, dpi):
     from extract_scan import extract_selected_pages
     extraction = extract_selected_pages(
         job / 'source.pdf', [1], job / 'extract', dpi=dpi,
+        run_ocr=run_ocr,
         ocr_scales=(image_ocr_scale(metadata['pixel_size'], dpi),))
     (job / 'manifest').mkdir(exist_ok=True)
     run(SCAN / 'draft_blocks.py', '--extraction', job / 'extract/extraction-report.json',
@@ -76,6 +96,8 @@ def prepare(source, job, target, dpi):
     })
     # Compact evidence for a single model read, not another OCR or translation.
     save(job / 'manifest/context.json', {
+        **({k: extraction[k] for k in ('recognition_skipped', 'reading_method')}
+           if extraction.get('recognition_skipped') else {}),
         'pages': draft['pages'],
         'groups': [{k: g[k] for k in ('id', 'line_ids', 'text', 'role', 'box')}
                    for g in draft['groups']],
@@ -155,6 +177,14 @@ def import_rows(job, path):
 
 
 def build(job, output):
+    metadata = read(job / 'image-metadata.json')
+    source = Path(metadata['source_path'])
+    if same_path(source, output):
+        raise ValueError('Output must not overwrite source')
+    if sha256_file(source) != metadata['source_sha256']:
+        raise ValueError('Source changed before image build')
+    if expected_format(output) != metadata['format']:
+        raise ValueError('Output must use the same image format as the source')
     run(SCAN / 'compile_translation.py',
         '--extraction', job / 'extract/extraction-report.json',
         '--draft', job / 'manifest/draft-groups.json',
@@ -163,11 +193,24 @@ def build(job, output):
     pdf = job / 'output/translated.pdf'
     run(SCAN / 'build_scan.py', '--manifest', job / 'manifest/translation-manifest.json',
         '--output', pdf)
-    unwrap(pdf, job / 'image-metadata.json', output)
-    metadata = read(job / 'image-metadata.json')
-    restore_untouched_pixels(Path(metadata['source_path']), output,
-                             read(job / 'manifest/translation-manifest.json'),
-                             metadata['source_sha256'])
+    raster = job / 'output/translated-raster.png'
+    composed = job / 'output/composed.png'
+    # Keep the official renderer lossless until the final single JPEG encode.
+    unwrap(pdf, job / 'image-metadata.json', raster, lossless=True)
+    manifest_path = job / 'manifest/translation-manifest.json'
+    restore_untouched_pixels(source, output, read(manifest_path),
+                             metadata['source_sha256'], raster_path=raster,
+                             composed_path=composed)
+    save(job / 'output/image-composition.json', {
+        'schema_version': 1, 'composer': 'PDF-TRANSLATE-PRO-IMAGE',
+        'source_sha256': metadata['source_sha256'],
+        'manifest_sha256': sha256_file(manifest_path),
+        'pdf_sha256': sha256_file(pdf),
+        'build_report_sha256': sha256_file(pdf.with_suffix('.build-report.json')),
+        'raster_sha256': sha256_file(raster), 'composed_sha256': sha256_file(composed),
+        'candidate_sha256': sha256_file(output),
+        'jpeg_options': JPEG_OPTIONS if metadata['format'] == 'JPEG' else None,
+    })
     print(json.dumps({'candidate_sha256':sha256_file(output), 'output':str(output)}))
 
 
@@ -207,25 +250,82 @@ def edit_mask(manifest, size):
     return allowed
 
 
-def restore_untouched_pixels(source, output, manifest, source_hash):
+def restore_untouched_pixels(source, output, manifest, source_hash, *, raster_path=None, composed_path=None):
     """Avoid PDF round-trip resampling outside reviewed text regions.
 
     Translated pixels still come exclusively from the official raster builder.
-    JPEG must be re-encoded; its final differences remain visible in check().
+    Retain lossless composition evidence before JPEG's one final encode.
     """
     if sha256_file(source) != source_hash:
         raise ValueError('Source changed before output composition')
+    if same_path(source, output):
+        raise ValueError('Output must not overwrite source')
     with Image.open(source) as raw:
         fmt = raw.format
         src = ImageOps.exif_transpose(raw).copy()
-    with Image.open(output) as raw:
+        if fmt == 'PNG' and 'transparency' in src.info:
+            src = src.convert('RGBA')
+    if expected_format(output) != fmt:
+        raise ValueError('Output must use the same image format as the source')
+    with Image.open(raster_path or output) as raw:
         dst = raw.convert('RGBA' if 'A' in src.getbands() else 'RGB')
     src = src.convert(dst.mode)
     if src.size != dst.size:
         raise ValueError('Cannot compose images with different sizes')
     mask = Image.fromarray(edit_mask(manifest, src.size).astype('uint8') * 255)
     src.paste(dst, mask=mask)
-    src.save(output, format=fmt, **({'quality': 95, 'subsampling': 0} if fmt == 'JPEG' else {}))
+    if composed_path is not None:
+        if same_path(source, composed_path) or same_path(output, composed_path):
+            raise ValueError('Composition evidence must have a separate path')
+        save_image_atomic(src, composed_path, 'PNG')
+    if sha256_file(source) != source_hash:
+        raise ValueError('Source changed during output composition')
+    save_image_atomic(src, output, fmt)
+
+
+def check_jpeg_composition(job, source_hash, output_hash, src, allowed):
+    """Account for JPEG loss using exact reproduction, never pixel thresholds.
+
+    All evidence is local audit data tied to this build, not a signed attestation.
+    Source pixels must remain exact in the retained lossless composition outside
+    approved edits, and all edited pixels must come from the official raster.
+    """
+    try:
+        evidence = read(job / 'output/image-composition.json')
+        paths = {
+            'manifest_sha256': job / 'manifest/translation-manifest.json',
+            'pdf_sha256': job / 'output/translated.pdf',
+            'build_report_sha256': job / 'output/translated.build-report.json',
+            'raster_sha256': job / 'output/translated-raster.png',
+            'composed_sha256': job / 'output/composed.png',
+        }
+        if (evidence.get('schema_version') != 1
+                or evidence.get('composer') != 'PDF-TRANSLATE-PRO-IMAGE'
+                or evidence.get('source_sha256') != source_hash
+                or evidence.get('candidate_sha256') != output_hash
+                or evidence.get('jpeg_options') != JPEG_OPTIONS
+                or any(evidence.get(key) != sha256_file(path) for key, path in paths.items())):
+            return {'status': 'failed', 'reason': 'stale_composition_evidence'}
+        with Image.open(paths['composed_sha256']) as raw:
+            if raw.format != 'PNG' or raw.mode != 'RGB':
+                return {'status': 'failed', 'reason': 'invalid_lossless_composition'}
+            composed = raw.copy()
+        with Image.open(paths['raster_sha256']) as raw:
+            raster = raw.convert('RGB')
+        if composed.size != src.size or raster.size != src.size:
+            return {'status': 'failed', 'reason': 'composition_geometry_mismatch'}
+        pixels, original = np.asarray(composed), np.asarray(src.convert('RGB'))
+        outside_equal = bool(np.array_equal(pixels[~allowed], original[~allowed]))
+        edits_equal = bool(np.array_equal(pixels[allowed], np.asarray(raster)[allowed]))
+        encoded = BytesIO()
+        composed.save(encoded, format='JPEG', **JPEG_OPTIONS)
+        encoding_equal = hashlib.sha256(encoded.getvalue()).hexdigest() == output_hash
+        return {'status': 'passed' if outside_equal and edits_equal and encoding_equal else 'failed',
+                'lossless_outside_equal': outside_equal, 'official_edit_pixels_equal': edits_equal,
+                'expected_jpeg_bytes_equal': encoding_equal,
+                'jpeg_options': JPEG_OPTIONS}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'status': 'failed', 'reason': 'missing_or_invalid_composition_evidence'}
 
 
 def check(source, job, output):
@@ -267,9 +367,12 @@ def check(source, job, output):
                           'outside_max_difference': int(outside.max()) if outside.size else 0,
                           'outside_mean_difference': float(outside.mean()) if outside.size else 0,
                           'alpha_equal': bool(np.array_equal(a[:, :, 3], b[:, :, 3]))}
-        # PNG is lossless. JPEG differences need a located source/output review;
-        # do not silently invent a tolerance or borrow PDF cleanup evidence.
-        pixel_evidence['status'] = 'passed' if changed == 0 and pixel_evidence['alpha_equal'] else 'unverified'
+        if source_format == 'JPEG':
+            composition = check_jpeg_composition(job, source_hash, output_hash, src, allowed)
+            pixel_evidence['composition'] = composition
+            pixel_evidence['status'] = composition['status']
+        else:
+            pixel_evidence['status'] = 'passed' if changed == 0 and pixel_evidence['alpha_equal'] else 'unverified'
         if pixel_evidence['status'] != 'passed':
             failures.append('final_image_nontext_changes_require_review')
     required_ids = {line['id'] for line in manifest['source_lines']}
@@ -308,6 +411,8 @@ def main():
     p.add_argument('--source', required=True, type=Path)
     p.add_argument('--target-language', required=True)
     p.add_argument('--dpi', type=int, default=400)
+    p.add_argument('--no-ocr', action='store_true',
+                   help='Prepare for located visual transcription without running a recognizer')
     for name in ('build', 'check', 'finish'):
         p2 = subs.add_parser(name)
         p2.add_argument('--output', required=True, type=Path)
@@ -324,7 +429,8 @@ def main():
     args = parser.parse_args()
     started = time.perf_counter()
     if args.command == 'prepare':
-        prepare(args.source.resolve(), args.job.resolve(), args.target_language, args.dpi)
+        prepare(args.source.resolve(), args.job.resolve(), args.target_language, args.dpi,
+                run_ocr=not args.no_ocr)
     elif args.command == 'build':
         if args.rows:
             import_rows(args.job.resolve(), args.rows)

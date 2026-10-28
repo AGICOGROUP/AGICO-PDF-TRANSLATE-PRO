@@ -150,6 +150,7 @@ def test_ocr_resume_keeps_completed_page_after_failure(tmp_path, monkeypatch):
     writer.add_blank_page(width=100, height=100)
     writer.write(source)
     monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', types.SimpleNamespace(RapidOCR=lambda: object()))
+    monkeypatch.setattr(extract_scan, 'ocr_runtime_signature', lambda: {'fixture_runtime': 'unchanged'})
     monkeypatch.setattr(extract_scan, 'configure_page_detector', lambda engine: None)
     count = 0
     def fake_pass(engine, image, scale):

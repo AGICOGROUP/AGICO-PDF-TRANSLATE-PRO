@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -83,30 +86,46 @@ def sparse_landscape_pages(
     ]
 
 
-def painted_path_counts(source: Path, page_numbers: list[int]) -> dict[int, int]:
+@contextmanager
+def text_probe_document(source: Path, page_count: int):
+    """Open the optional fast backend once; pypdf remains the reading gate."""
+    document = None
+    try:
+        import pymupdf
+        document = pymupdf.open(source)
+        if document.is_repaired or document.page_count != page_count:
+            document.close()
+            document = None
+    except Exception:
+        if document is not None:
+            document.close()
+        document = None
+    try:
+        yield document
+    finally:
+        if document is not None:
+            document.close()
+
+
+def painted_path_counts(
+    source: Path, page_numbers: list[int], *, document=None
+) -> dict[int, int]:
     """Return painted vector paths per requested page; {} when unavailable.
 
     Only sparse landscape pages are probed, so ordinary documents pay no cost.
     Pages beyond ``PATH_PROBE_PAGE_LIMIT`` stay unprobed.
     """
-    try:
-        import pymupdf
-    except ImportError:
-        return {}
     wanted = {page for page in page_numbers if page <= PATH_PROBE_PAGE_LIMIT}
     if not wanted:
         return {}
-    counts: dict[int, int] = {}
     try:
+        if document is not None:
+            return {index: len(document[index - 1].get_drawings()) for index in sorted(wanted)}
+        import pymupdf
         with pymupdf.open(source) as document:
-            for index, page in enumerate(document, start=1):
-                if index > max(wanted):
-                    break
-                if index in wanted:
-                    counts[index] = len(page.get_drawings())
+            return {index: len(document[index - 1].get_drawings()) for index in sorted(wanted)}
     except Exception:
         return {}
-    return counts
 
 
 def classify_document_kind(
@@ -182,11 +201,19 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
         counts: list[int] = []
         rotated: list[int] = []
         page_sizes: list[tuple[float, float]] = []
-        for page_number, page in enumerate(reader.pages, start=1):
-            counts.append(native_char_count(page))
-            page_sizes.append((float(page.mediabox.width), float(page.mediabox.height)))
-            if int(page.rotation or 0) % 360:
-                rotated.append(page_number)
+        with text_probe_document(source, len(reader.pages)) as document:
+            for page_number, page in enumerate(reader.pages, start=1):
+                try:
+                    trace_page = document[page_number - 1] if document is not None else None
+                except Exception:
+                    trace_page = None
+                counts.append(native_char_count(page, trace_page=trace_page))
+                page_sizes.append((float(page.mediabox.width), float(page.mediabox.height)))
+                if int(page.rotation or 0) % 360:
+                    rotated.append(page_number)
+            path_counts = painted_path_counts(
+                source, sparse_landscape_pages(page_sizes, counts), document=document
+            )
     except (OSError, PdfReadError, ValueError, TypeError) as exc:
         return 2, report(error=f"cannot read PDF: {exc}")
 
@@ -197,7 +224,7 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
     document_kind, drawing_evidence = classify_document_kind(
         page_sizes,
         counts,
-        painted_path_counts(source, sparse_landscape_pages(page_sizes, counts)),
+        path_counts,
     )
     drawing = document_kind == "engineering-drawing"
     if native_text_pages == 0:
@@ -266,6 +293,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
+    parser.add_argument("--output", type=Path, help="atomically save the UTF-8 JSON report")
     parser.add_argument(
         "--mode",
         choices=("auto", "replace", "bilingual"),
@@ -273,8 +301,28 @@ def main() -> int:
         help="output mode; engineering drawings default to bilingual in auto mode",
     )
     args = parser.parse_args()
+    if args.output is not None and args.output.resolve() == args.source.resolve():
+        parser.error("--output must differ from the source PDF")
     exit_code, result = route(args.source, mode=args.mode)
-    print(json.dumps(result, ensure_ascii=False))
+    serialized = json.dumps(result, ensure_ascii=False)
+    print(serialized)
+    if args.output is not None:
+        temporary = None
+        try:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=args.output.parent,
+                prefix=f".{args.output.name}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                stream.write(serialized + "\n")
+            os.replace(temporary, args.output)
+        except OSError as exc:
+            print(f"cannot save route report: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return exit_code
 
 

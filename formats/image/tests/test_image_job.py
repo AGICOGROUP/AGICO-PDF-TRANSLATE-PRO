@@ -142,3 +142,189 @@ def test_review_serializer_rejects_stale_candidate_and_empty_findings(tmp_path):
     with pytest.raises(ValueError,match='findings'):
         record_review(tmp_path,output,sha256_file(output),'')
     assert not (tmp_path/'review').exists()
+
+
+def jpeg_build_fixture(root):
+    """Fresh synthetic artwork, real compiler/builder/Poppler, no OCR or reviews."""
+    from image_pdf_bridge import wrap
+    root.mkdir(exist_ok=True)
+    src, output = root/'source.jpg', root/'result.jpg'
+    rng = np.random.default_rng(32)
+    Image.fromarray(rng.integers(0, 256, (100,100,3), dtype=np.uint8)).save(src, quality=87)
+    wrap(src, root/'source.pdf', root/'image-metadata.json')
+    render = root/'source-render.png'
+    with Image.open(src) as raw:
+        raw.save(render)
+    extraction, draft, decisions = fixture_data()
+    for value in (extraction, draft, decisions):
+        value['source_sha256'] = sha256_file(root/'source.pdf')
+    extraction['source'] = str(root/'source.pdf')
+    extraction['pages'][0]['render_path'] = str(render)
+    decisions['target_language'] = 'en'
+    decisions['regions'][0]['translation'] = 'Complete text'
+    for name, value in [('extract/extraction-report.json', extraction),
+                        ('manifest/draft-groups.json', draft),
+                        ('manifest/decisions.json', decisions)]:
+        image_job.save(root/name, value)
+    return src, output
+
+
+def test_real_jpeg_build_accounts_for_encoding_without_pretending_reviews_pass(tmp_path):
+    src, output = jpeg_build_fixture(tmp_path)
+    image_job.build(tmp_path, output)
+    report = check(src, tmp_path, output)
+    pixels = report['pixel_check']
+    assert pixels['outside_changed_pixels'] > 0  # The previous gate always rejected this.
+    assert pixels['status'] == 'passed'
+    assert pixels['composition']['lossless_outside_equal']
+    assert pixels['composition']['official_edit_pixels_equal']
+    assert pixels['composition']['expected_jpeg_bytes_equal']
+    assert not report['passed']
+    assert set(report['failures']) == {'missing_translation-review', 'missing_visual-review'}
+
+
+@pytest.mark.parametrize('damage', ['final', 'composed_outside', 'composed_inside', 'manifest', 'missing'])
+def test_jpeg_composition_rejects_stale_or_damaged_evidence(tmp_path, damage):
+    from image_pdf_bridge import JPEG_OPTIONS
+    src, output = jpeg_build_fixture(tmp_path)
+    image_job.build(tmp_path, output)
+    evidence_path = tmp_path/'output/image-composition.json'
+    evidence = image_job.read(evidence_path)
+    if damage == 'missing':
+        evidence_path.unlink()
+    elif damage == 'manifest':
+        manifest_path = tmp_path/'manifest/translation-manifest.json'
+        manifest = image_job.read(manifest_path)
+        manifest['target_language'] = 'fr'
+        image_job.save(manifest_path, manifest)
+    elif damage == 'final':
+        with Image.open(output) as raw:
+            image = raw.copy()
+        image.putpixel((95,95), (0,0,0))
+        image.save(output, **JPEG_OPTIONS)
+        # Even updating the final hash cannot bless a non-reproducible JPEG.
+        evidence['candidate_sha256'] = sha256_file(output)
+        image_job.save(evidence_path, evidence)
+    else:
+        composed = tmp_path/'output/composed.png'
+        with Image.open(composed) as raw:
+            image = raw.copy()
+        image.putpixel((95,95) if damage.endswith('outside') else (15,15), (12,34,56))
+        image.save(composed)
+        image.save(output, format='JPEG', **JPEG_OPTIONS)
+        # Rebinding hashes cannot hide lossless artwork/official edit damage.
+        evidence['composed_sha256'] = sha256_file(composed)
+        evidence['candidate_sha256'] = sha256_file(output)
+        image_job.save(evidence_path, evidence)
+    report = check(src, tmp_path, output)
+    assert not report['passed']
+    assert report['pixel_check']['status'] == 'failed'
+    assert 'final_image_nontext_changes_require_review' in report['failures']
+
+
+def test_prepare_rejects_any_previous_job_artifacts_before_metrics_or_source_changes(tmp_path, monkeypatch):
+    job = tmp_path/'job'
+    job.mkdir()
+    (job/'image-metadata.json').write_text('previous task')
+    monkeypatch.setattr(image_job, 'run', lambda *args: pytest.fail('Must reject before running tools'))
+    with pytest.raises(ValueError, match='new job'):
+        image_job.prepare(tmp_path/'source.png', job, 'en', 400)
+    assert (job/'image-metadata.json').read_text() == 'previous task'
+
+
+def test_build_rejects_source_overwrite_and_changed_source_before_compilation(tmp_path, monkeypatch):
+    src, output = jpeg_build_fixture(tmp_path)
+    monkeypatch.setattr(image_job, 'run', lambda *args: pytest.fail('Must reject before running tools'))
+    original = src.read_bytes()
+    with pytest.raises(ValueError, match='overwrite source'):
+        image_job.build(tmp_path, src)
+    assert src.read_bytes() == original
+    Image.new('RGB',(100,100),'black').save(src)
+    with pytest.raises(ValueError, match='Source changed'):
+        image_job.build(tmp_path, output)
+    assert not output.exists()
+
+
+def test_failed_composition_encode_preserves_existing_candidate(tmp_path, monkeypatch):
+    extraction, draft, decisions = fixture_data()
+    manifest = compile_translation(extraction, draft, decisions)
+    src, output = tmp_path/'source.png', tmp_path/'out.png'
+    Image.new('RGB',(100,100),'white').save(src)
+    Image.new('RGB',(100,100),'black').save(output)
+    original = output.read_bytes()
+    def fail_encode(self, path, **kwargs):
+        Path(path).write_bytes(b'partial encoding')
+        raise OSError('synthetic encoder failure')
+    monkeypatch.setattr(Image.Image, 'save', fail_encode)
+    with pytest.raises(OSError, match='encoder failure'):
+        restore_untouched_pixels(src, output, manifest, sha256_file(src))
+    assert output.read_bytes() == original
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['out.png','source.png']
+
+
+def test_palette_png_transparency_survives_wrap_and_composition(tmp_path):
+    from image_pdf_bridge import wrap
+    src, output = tmp_path/'source.png', tmp_path/'output.png'
+    image = Image.new('P', (100,100), 0)
+    image.putpalette([255,255,255, 0,0,0] + [0]*762)
+    image.putpixel((50,50), 1)
+    image.save(src, transparency=0)
+    wrap(src, tmp_path/'source.pdf', tmp_path/'image-metadata.json')
+    metadata = image_job.read(tmp_path/'image-metadata.json')
+    assert metadata['alpha_file']
+    Image.new('RGBA', (100,100),(0,0,0,0)).save(output)
+    manifest = compile_translation(*fixture_data())
+    restore_untouched_pixels(src, output, manifest, sha256_file(src))
+    with Image.open(output) as final:
+        assert final.mode == 'RGBA'
+        assert final.getpixel((50,50))[3] == 255
+        assert final.getpixel((90,90))[3] == 0
+
+
+def test_prepare_no_ocr_requires_visual_transcription_and_does_not_claim_no_text(tmp_path, monkeypatch, capsys):
+    import extract_scan
+    from PIL import ImageDraw
+    def unexpected_ocr(*args, **kwargs):
+        pytest.fail('Visual preparation must not initialize or call OCR')
+    monkeypatch.setattr(extract_scan, 'ocr_runtime_signature', unexpected_ocr)
+    monkeypatch.setattr(extract_scan, '_ocr_pass', unexpected_ocr)
+    source, job = tmp_path/'source.png', tmp_path/'job'
+    image = Image.new('RGB',(240,80),'white')
+    ImageDraw.Draw(image).text((15,20), 'Source text requires transcription', fill='black')
+    image.save(source)
+    image_job.prepare(source, job, 'en', 72, run_ocr=False)
+    extraction = image_job.read(job/'extract/extraction-report.json')
+    context = image_job.read(job/'manifest/context.json')
+    for evidence in (extraction, context):
+        assert evidence['recognition_skipped'] is True
+        assert evidence['reading_method'] == 'visual_required'
+    assert extraction['source_lines'] == []
+    assert extraction['pages'][0]['ocr_review_candidates']
+    assert all(candidate['ocr_attempts'] == 0
+               for candidate in extraction['pages'][0]['ocr_review_candidates'])
+    assert 'visual_required' in capsys.readouterr().out
+    assert not (job/'output').exists()
+    assert not (job/'review').exists()
+    # An empty unrecognized inventory cannot pass the manifest contract.
+    with pytest.raises(ValueError, match='source_lines'):
+        compile_translation(extraction, image_job.read(job/'manifest/draft-groups.json'),
+                            image_job.read(job/'manifest/decisions.json'))
+    rows = tmp_path/'visual.tsv'
+    rows.write_text('+visual1\tbody\tLocated translation\t15,20,220,35\tVisually read source\n',encoding='utf-8')
+    import_rows(job,rows)
+    decisions = image_job.read(job/'manifest/decisions.json')
+    assert decisions['supplements'][0]['origin'] == 'visual_supplement'
+    assert decisions['supplements'][0]['box'] == [15,20,220,35]
+    assert not (job/'review').exists()
+
+
+def test_prepare_cli_no_ocr_flag_passes_explicit_method_and_default_stays_enabled(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(image_job, 'prepare', lambda *args, **kwargs: calls.append(kwargs))
+    command = ['image_job.py','prepare','--source',str(tmp_path/'source.png'),
+               '--job',str(tmp_path/'job'),'--target-language','en']
+    monkeypatch.setattr(sys, 'argv', command + ['--no-ocr'])
+    assert image_job.main() == 0
+    monkeypatch.setattr(sys, 'argv', command)
+    assert image_job.main() == 0
+    assert calls == [{'run_ocr':False}, {'run_ocr':True}]

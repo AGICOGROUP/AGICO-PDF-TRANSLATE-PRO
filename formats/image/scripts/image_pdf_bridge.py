@@ -4,10 +4,11 @@ import argparse
 from io import BytesIO
 import hashlib
 import json
+import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
+import tempfile
 
 from PIL import Image, ImageOps
 from reportlab.lib.utils import ImageReader
@@ -15,6 +16,7 @@ from reportlab.pdfgen import canvas
 
 
 SUPPORTED_SUFFIXES = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG"}
+JPEG_OPTIONS = {"quality": 95, "subsampling": 0, "optimize": True}
 
 
 class BridgeError(ValueError):
@@ -36,6 +38,24 @@ def expected_format(path: Path) -> str:
         raise BridgeError("Input and output images must use PNG or JPEG format") from exc
 
 
+def same_path(first: Path, second: Path) -> bool:
+    return first.resolve() == second.resolve() or (
+        first.exists() and second.exists() and first.samefile(second))
+
+
+def save_image_atomic(image: Image.Image, output: Path, image_format: str) -> None:
+    """Publish only a completely encoded image; preserve an older candidate on failure."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(prefix=f".{output.stem}-", suffix=output.suffix, dir=output.parent)
+    os.close(handle)
+    temporary = Path(name)
+    try:
+        image.save(temporary, format=image_format, **(JPEG_OPTIONS if image_format == "JPEG" else {}))
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pdf" / "scripts"))
 from poppler import find_pdftoppm as _find_pdftoppm  # noqa: E402
 
@@ -52,6 +72,10 @@ def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:
     declared_format = expected_format(source)
     if not source.is_file():
         raise BridgeError(f"Source image does not exist: {source}")
+    if any(same_path(first, second) for first, second in (
+            (source, output_pdf), (source, metadata_path), (output_pdf, metadata_path))):
+        raise BridgeError("Source, PDF carrier and metadata must have distinct paths")
+    source_hash = sha256_file(source)
 
     with Image.open(source) as opened:
         if getattr(opened, "n_frames", 1) != 1 or getattr(opened, "is_animated", False):
@@ -59,12 +83,20 @@ def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:
         if opened.format != declared_format:
             raise BridgeError("Image extension does not match its encoded PNG or JPEG format")
         image = ImageOps.exif_transpose(opened).copy()
+        if declared_format == 'PNG' and 'transparency' in image.info:
+            image = image.convert('RGBA')
+    if sha256_file(source) != source_hash:
+        raise BridgeError("Source changed during image preparation")
 
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    output_pdf.parent.mkdir(parents=True, exist_ok=True)
     alpha_name = None
     if declared_format == "PNG" and "A" in image.getbands():
         alpha_name = f"{metadata_path.stem}-alpha.png"
+        alpha_path = metadata_path.with_name(alpha_name)
+        if any(same_path(alpha_path, protected) for protected in (source, output_pdf, metadata_path)):
+            raise BridgeError("Derived alpha image must have a distinct path from source, PDF carrier and metadata")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    output_pdf.parent.mkdir(parents=True, exist_ok=True)
+    if alpha_name is not None:
         image.getchannel("A").save(metadata_path.with_name(alpha_name), format="PNG")
         background = Image.new("RGB", image.size, "white")
         background.paste(image.convert("RGB"), mask=image.getchannel("A"))
@@ -84,7 +116,7 @@ def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:
     metadata = {
         "schema_version": 1,
         "source_path": str(source.resolve()),
-        "source_sha256": sha256_file(source),
+        "source_sha256": source_hash,
         "format": declared_format,
         "source_suffix": source.suffix.lower(),
         "pixel_size": [width, height],
@@ -94,12 +126,17 @@ def wrap(source: Path, output_pdf: Path, metadata_path: Path) -> None:
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path) -> None:
+def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path, *, lossless: bool = False) -> None:
     if not translated_pdf.is_file() or not metadata_path.is_file():
         raise BridgeError("Translated PDF and image metadata must exist")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for protected in (translated_pdf, metadata_path, Path(metadata["source_path"])):
+        if same_path(output_image, protected):
+            raise BridgeError("Output must not overwrite source or job inputs")
     output_format = expected_format(output_image)
-    if output_format != metadata.get("format"):
+    if lossless and output_format != "PNG":
+        raise BridgeError("Lossless builder intermediates must use PNG")
+    if not lossless and output_format != metadata.get("format"):
         raise BridgeError("Output must use the same image format as the source")
     build_report_path = translated_pdf.with_suffix(".build-report.json")
     if not build_report_path.is_file():
@@ -112,14 +149,16 @@ def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path) -> Non
         raise BridgeError("Official scan build report does not match translated PDF")
 
     output_image.parent.mkdir(parents=True, exist_ok=True)
-    render_prefix = output_image.parent / f".{output_image.stem}-render"
+    handle, render_name = tempfile.mkstemp(prefix=f".{output_image.stem}-render-", dir=output_image.parent)
+    os.close(handle)
+    render_prefix = Path(render_name)
+    render_prefix.unlink()
     command = [find_pdftoppm(), "-f", "1", "-l", "1", "-r", "72", "-singlefile", "-png", str(translated_pdf), str(render_prefix)]
     completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
-    rendered_path = render_prefix.with_suffix(".png")
-    if completed.returncode != 0 or not rendered_path.exists():
-        raise BridgeError(completed.stderr.strip() or "Failed to render translated PDF")
-
+    rendered_path = Path(str(render_prefix) + '.png')
     try:
+        if completed.returncode != 0 or not rendered_path.exists():
+            raise BridgeError(completed.stderr.strip() or "Failed to render translated PDF")
         with Image.open(rendered_path) as opened:
             rendered = opened.convert("RGB")
         size = tuple(int(value) for value in metadata["pixel_size"])
@@ -132,11 +171,11 @@ def unwrap(translated_pdf: Path, metadata_path: Path, output_image: Path) -> Non
             if alpha.size != size:
                 raise BridgeError("Stored PNG alpha dimensions do not match the source")
             rendered.putalpha(alpha)
-            rendered.save(output_image, format="PNG")
+            save_image_atomic(rendered, output_image, "PNG")
         elif output_format == "PNG":
-            rendered.save(output_image, format="PNG")
+            save_image_atomic(rendered, output_image, "PNG")
         else:
-            rendered.save(output_image, format="JPEG", quality=95, subsampling=0, optimize=True)
+            save_image_atomic(rendered, output_image, "JPEG")
     finally:
         rendered_path.unlink(missing_ok=True)
 
