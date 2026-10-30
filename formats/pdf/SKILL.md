@@ -32,6 +32,10 @@ or explicit `bilingual`. A single-language target uses replacement, including
 engineering sheets. Raster pages within a genuinely mixed PDF stay in its one
 selected adapter. All scan-only pages preserve their raster bases.
 
+When translation expansion cannot fit readably, all PDF adapters follow the
+shared [pagination policy](../../references/pdf-pagination.md). Necessary added
+pages and updated page numbers are authorized; formatting remains preserved.
+
 ## Drawing coverage and already-complete originals
 
 For engineering drawings in `add_bilingual`, inventory visible labels in the

@@ -49,9 +49,11 @@ For old incorrectly bound rows use reviewed `manual_table_parts` or re-extract.
 [manifest schema](references/manifest-schema.md) define the existing fields.
 
 Wrap at a consistent source-derived role baseline. First repair avoidably narrow
-boxes; then shrink only an overflowing paragraph/cell uniformly and record why.
-Keep emphasis and technical symbols from source evidence. Preserve page count and
-image aspect ratio; use verified whitespace only after an actual fit failure.
+boxes and use verified whitespace. If translation expansion still cannot fit
+readably, prefer necessary continuation pages under the shared
+[pagination policy](../../../references/pdf-pagination.md) over excessive shrinking.
+Keep emphasis, technical symbols, image aspect ratio and the source formatting.
+Only minor local fitting may shrink an overflowing paragraph/cell uniformly.
 
 ## Text inside images
 

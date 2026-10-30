@@ -52,6 +52,8 @@ read adapter-specific schemas only when producing their artifact.
   gets at most two attempts and a disclosed source limitation if still unreadable.
 - Wrap at a consistent role baseline. Only a genuinely overflowing paragraph or
   cell shrinks as a whole after its safe space is used. Keep source role hierarchy.
+  For PDFs, necessary translation expansion may instead use continuation pages
+  under [PDF pagination](references/pdf-pagination.md); preserve formatting.
 
 Inspect every selected output page once, then only changed regions and anomalies
 after local repair. Save actual hash-bound semantic and visual findings. Build

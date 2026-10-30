@@ -9,6 +9,11 @@ All PDF/image adapters use three blocking requirements:
 3. Key structure intact: preserve page geometry, table relationships, drawing
    connections, images, symbols, signatures and seals.
 
+Necessary PDF translation expansion may change pagination under
+[PDF pagination](pdf-pagination.md), preserving formatting and verified content
+mapping. A justified page-count change alone is not a structure failure; missing
+content, changed page dimensions or damaged formatting remain blocking.
+
 Source-relative font floors, exact header/footer size, minor weight/alignment
 differences and harmless bounding-box intersections are diagnostic warnings.
 Inspect suspicious regions once; confirmed unreadability or semantic/structural

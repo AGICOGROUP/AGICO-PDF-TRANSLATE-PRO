@@ -47,7 +47,9 @@ python formats/pdf/bilingual/scripts/bilingual_overlay.py <original.pdf> --trans
 
 Check `--help` for the actual positional/named interface before invocation.
 Source counts, binding coordinates and a successful save do not establish complete
-semantic coverage. Keep original page count, page boxes, rotation and artwork.
+semantic coverage. Keep original page count by default; necessary translation
+expansion follows [PDF pagination](../../../references/pdf-pagination.md).
+Keep page boxes, rotation and artwork.
 No source cleanup is authorized in this additive branch.
 
 ## Acceptance

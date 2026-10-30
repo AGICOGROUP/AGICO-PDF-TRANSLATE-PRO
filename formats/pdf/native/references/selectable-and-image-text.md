@@ -144,12 +144,13 @@ Use this order:
 5. Fit only genuinely overflowing paragraphs at a smaller uniform paragraph
    size; do not shrink unrelated body text. Keep heading hierarchy and actual
    readability. Cosmetic differences do not require another reconstruction.
-6. If the content still cannot fit safely, report the limitation. Additional
-   pages require user approval, not an automatic continuation-page fallback.
+6. If translation expansion still cannot fit readably, use necessary continuation
+   pages following [PDF pagination](../../../../references/pdf-pagination.md).
+   No further approval is required for this case; retain the source formatting.
 
 This is an adaptive decision sequence, not permission to redesign arbitrarily:
-keep page count, visual hierarchy, object order, colors, and source identity
-unless the user explicitly authorizes a broader redesign.
+keep visual hierarchy, object order, colors, and source identity. Page count may
+increase only as needed for translation expansion under that pagination policy.
 
 ## Proven recovery strategy
 
