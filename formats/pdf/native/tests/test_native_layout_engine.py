@@ -248,6 +248,34 @@ class SourceTypographyTests(unittest.TestCase):
 
 
 class PageLayoutWrapperTests(unittest.TestCase):
+    def test_bound_cells_preserve_unambiguous_source_alignment(self):
+        for source_box, expected in (([140, 22, 160, 32], "center"),
+                                     ([103, 22, 196, 32], "left"),
+                                     ([176, 22, 196, 32], "right")):
+            with self.subTest(expected=expected):
+                item = block("p0001-b0001", "unit", "unit", source_box, size=10)
+                item["source_cell_bbox"] = [100, 20, 200, 40]
+                page = {"page": 1, "width": 300, "height": 300,
+                        "blocks": [item], "table_cells": [{"bbox": [100, 20, 200, 40]}]}
+                flows, _ = rebuild.build_table_cell_render_plan(page, pipeline)
+                self.assertEqual(expected, flows[0]["alignment"])
+                self.assertEqual([102, 20.25, 198, 39.75], flows[0]["box"])
+
+    def test_unbound_cell_uses_local_source_center_not_page_or_neighbor(self):
+        item = block("p0001-b0001", "kJ/m3", "kJ/m3", [140, 22, 160, 32], size=10)
+        page = {"page": 1, "width": 300, "height": 300, "blocks": [item],
+                "table_cells": [{"bbox": [0, 20, 100, 40]}, {"bbox": [100, 20, 200, 40]}]}
+        flows, _ = rebuild.build_table_cell_render_plan(page, pipeline)
+        self.assertEqual("center", flows[0]["alignment"])
+        self.assertEqual([102, 20.25, 198, 39.75], flows[0]["box"])
+
+    def test_cross_column_source_glyphs_do_not_change_cell_alignment(self):
+        line = {"bbox": [5, 22, 160, 32], "characters": [
+            {"text": "L", "bbox": [5, 22, 15, 32]},
+            {"text": "R", "bbox": [140, 22, 160, 32]}]}
+        self.assertEqual("center", rebuild.infer_cell_alignment([line], [100, 20, 200, 40], 10))
+        self.assertEqual("left", rebuild.infer_cell_alignment([line], [0, 20, 100, 40], 10))
+
     def test_cell_continuations_ignore_columns_in_unrelated_table(self):
         page = {"page": 1, "width": 300, "height": 300,
                 "table_cells": [{"bbox": box} for box in

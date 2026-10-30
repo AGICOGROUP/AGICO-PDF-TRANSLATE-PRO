@@ -77,7 +77,9 @@ Use these invariants:
 2. Merge compatible source lines into one paragraph flow. Fit the translation
    once across the original line slots so every line uses one font size.
 3. Preserve left/center/right alignment. A symmetric full-width body line is
-   body copy, not a centered title.
+   body copy, not a centered title. Within tables infer alignment from source
+   glyph margins in the physical cell, excluding neighboring columns; nearly
+   full-width or conflicting source lines conservatively stay left aligned.
 4. Use embedded-image boxes as exclusion geometry. A continuation slot that
    intersects most of an image is forbidden.
 5. Segment table text by physical cell, including extraction blocks that cross

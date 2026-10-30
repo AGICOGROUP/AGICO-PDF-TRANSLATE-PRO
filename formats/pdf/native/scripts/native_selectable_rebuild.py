@@ -169,6 +169,29 @@ def _box_contains(box: list[float], point: tuple[float, float]) -> bool:
     return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
 
 
+def infer_cell_alignment(lines: list[dict[str, Any]], cell: list[float], size: float) -> str:
+    """Use source glyph margins within this cell; ambiguous full lines stay left."""
+    alignments = []
+    tolerance = max(1.0, min(3.0, (cell[2] - cell[0]) * 0.01))
+    for line in lines:
+        glyphs = [char["bbox"] for char in line.get("characters", [])
+                  if str(char.get("text", "")).strip()
+                  and float(char["bbox"][0]) >= cell[0] - 0.5
+                  and float(char["bbox"][2]) <= cell[2] + 0.5]
+        box = ([min(b[0] for b in glyphs), 0, max(b[2] for b in glyphs), 0]
+               if glyphs else line["bbox"])
+        left, right = float(box[0]) - cell[0], cell[2] - float(box[2])
+        if left < -0.5 or right < -0.5:
+            return "left"
+        if min(left, right) > max(6.0, size * 0.6) and abs(left - right) <= tolerance:
+            alignments.append("center")
+        elif 0 <= right <= max(6.0, size * 0.75) and left > right + size:
+            alignments.append("right")
+        else:
+            alignments.append("left")
+    return alignments[0] if alignments and len(set(alignments)) == 1 else "left"
+
+
 def _smallest_containing_cell(
     page_info: dict[str, Any], line_box: list[float]
 ) -> list[float] | None:
@@ -662,7 +685,9 @@ def group_table_cell_flows(page_info: dict[str, Any]) -> list[dict[str, Any]]:
                 "style": copy.deepcopy(blocks[0]["style"]),
                 "role": blocks[0].get("role"),
                 "box": [cell[0] + 3, cell[1] + 2, cell[2] - 3, cell[3] - 2],
-                "alignment": "left",
+                "alignment": infer_cell_alignment(
+                    [line for block in blocks for line in block.get("lines", [])],
+                    cell, float(blocks[0]["style"].get("size", 9))),
                 "source_top": min(float(block["bbox"][1]) for block in blocks),
                 "fragments": [
                     {
@@ -678,7 +703,8 @@ def group_table_cell_flows(page_info: dict[str, Any]) -> list[dict[str, Any]]:
                         "source_left": float(block["bbox"][0]),
                         "style": copy.deepcopy(block["style"]),
                         "role": block.get("role"),
-                        "alignment": "left",
+                        "alignment": infer_cell_alignment(block.get("lines", []), cell,
+                                                          float(block["style"].get("size", 9))),
                     }
                     for block in blocks
                 ],
@@ -729,7 +755,8 @@ def aggregate_table_fragments(
                 "style": copy.deepcopy(first["style"]),
                 "role": first.get("role"),
                 "box": [float(value) for value in key],
-                "alignment": str(first.get("alignment", "left")),
+                "alignment": (str(first.get("alignment", "left"))
+                              if len({item.get("alignment", "left") for item in items}) == 1 else "left"),
                 "color": tuple(
                     int(value)
                     for value in first.get(
@@ -800,7 +827,8 @@ def build_table_cell_render_plan(
                 'block_id': block['id'], 'text': translation,
                 'box': [cell[0] + 2, cell[1] + 0.25, cell[2] - 2, cell[3] - 0.25],
                 'source_top': block['bbox'][1], 'source_left': block['bbox'][0],
-                'style': style, 'role': block.get('role'), 'alignment': 'left',
+                'style': style, 'role': block.get('role'),
+                'alignment': infer_cell_alignment(source_lines, cell, float(style.get('size', 9))),
                 'color': tuple(style.get('color_rgb', [0, 0, 0])),
             })
             consumed.add(str(block['id']))
@@ -922,7 +950,9 @@ def build_table_cell_render_plan(
                         "source_left": float(item["left"]),
                         "style": copy.deepcopy(block["style"]),
                         "role": block.get("role"),
-                        "alignment": "left",
+                        "alignment": infer_cell_alignment(
+                            [line], [cell_box[0] - 2, cell_box[1], cell_box[2] + 2, cell_box[3]],
+                            float(block["style"].get("size", 9))),
                         "color": color,
                     }
                 )
