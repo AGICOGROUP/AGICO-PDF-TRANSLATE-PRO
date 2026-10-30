@@ -100,9 +100,19 @@ Use these invariants:
    `max(9.5 pt, 60% of source size)` is diagnostic, not a hard gate.
 10. Treat new numbered items as paragraph boundaries, but do not mistake decimal
     values such as `0.5` for list numbers. Semicolon-separated equipment lists
-    remain one flow.
+    remain one flow. Short symbol definitions such as `AA = Equipment Code`
+    start separate flows; an unmarked wrapped continuation can join its definition.
 11. Preserve header/footer source size and verified visual weight. Replacement
-    font metrics may require a taller container, not a smaller font.
+    font metrics may require a taller container, not a smaller font. Right-side
+    footer labels retain their source right edge rather than the default page margin.
+    For an unchanged contact footer, keep source glyph positions and baselines so
+    original hyperlink hit areas and vector underlines remain registered. When a
+    footer contains one mailto link, translated labels may fit before/after its
+    anchored email at the source baseline, only with verified free horizontal
+    space and complete source matrix evidence. Validate both label widths before
+    painting. This requires a single source line/baseline and a single target line;
+    reviewed text geometry shifts invalidate the original decoration anchors.
+    Unsafe/multiple-link cases use normal layout and require visual review.
 12. Derive numbered heading depth from the complete prefix: `4、` is level 1,
     `4.1、` is level 2, and `4.1.2` is level 3. A bold decimal measurement or
     sentence with clause punctuation remains body text. If a wrapped heading

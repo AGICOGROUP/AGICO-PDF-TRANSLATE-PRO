@@ -17,6 +17,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import LimitReachedError, PyPdfError
 
 from contracts import TextOverflowError, fit_text, validate_manifest
 
@@ -607,10 +608,11 @@ def _read_page_cache(pdf_path: Path, key: str) -> dict | None:
         if report["output_sha256"] != hashlib.sha256(pdf_path.read_bytes()).hexdigest():
             return None
         # Reports are measured output, never semantic or visual review evidence.
-        if len(report["pages"]) != 1 or len(PdfReader(pdf_path).pages) != 1:
-            return None
+        with PdfReader(pdf_path) as reader:
+            if len(report["pages"]) != 1 or len(reader.pages) != 1:
+                return None
         return report
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, PyPdfError):
         return None
 
 
@@ -703,7 +705,10 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
                 page_started = time.perf_counter()
                 hit = not cold and page_report is not None
                 if page_report is None:
-                    page_report = _render_pdf(page_manifest, page_pdf, clean_dir)
+                    temporary_page = page_pdf.with_suffix(".building.pdf")
+                    page_report = _render_pdf(page_manifest, temporary_page, clean_dir)
+                    temporary_page.replace(page_pdf)
+                    page_report["output"] = str(page_pdf)
                     _save_page_cache(page_pdf, key, page_report)
                 if not cold:
                     writer.append(str(page_pdf))
@@ -724,8 +729,21 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
             if not cold:
                 # Built-in structural deduplication checks actual object contents,
                 # including font glyph maps; equal subset names alone are unsafe.
-                writer.compress_identical_objects()
-                writer.write(temporary_output)
+                try:
+                    writer.compress_identical_objects()
+                except LimitReachedError:
+                    # Dedup hashes decoded streams, so a valid large raster can
+                    # exceed pypdf's safety cap. The writer may already contain
+                    # removed duplicates: discard it and copy encoded pages into
+                    # a fresh writer, leaving the cap and page evidence intact.
+                    with PdfWriter() as fallback:
+                        for _, _, _, page_pdf, _ in entries:
+                            fallback.append(str(page_pdf))
+                        fallback.write(temporary_output)
+                    report["object_deduplication"] = "skipped_decompression_limit"
+                else:
+                    writer.write(temporary_output)
+                    report["object_deduplication"] = "completed"
     report.update(source_sha256=str(manifest.get("source_sha256", "")),
                   manifest_sha256=_json_hash(manifest), output=str(output),
                   output_sha256=hashlib.sha256(temporary_output.read_bytes()).hexdigest(),

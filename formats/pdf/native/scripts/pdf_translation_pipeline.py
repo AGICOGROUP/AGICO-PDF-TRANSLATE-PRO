@@ -147,6 +147,13 @@ def character_record(char: dict[str, Any]) -> dict[str, Any]:
         ],
         "font": font,
         "size": round(float(char.get("size", 0)), 3),
+        **({"baseline": round(float(char["top"]) + float(char["y1"])
+                              - float(char["matrix"][5]), 3)}
+           if isinstance(char.get("matrix"), (list, tuple))
+           and len(char["matrix"]) == 6 and "y1" in char and "top" in char
+           and all(isinstance(value, (int, float)) and math.isfinite(value) for value in char["matrix"])
+           and abs(char["matrix"][1]) < 0.001 and abs(char["matrix"][2]) < 0.001
+           and char["matrix"][0] > 0 and char["matrix"][3] > 0 else {}),
         "color_rgb": rgb,
         "bold": "bold" in font.lower(),
         "italic": any(token in font.lower() for token in ("italic", "oblique")),
@@ -1075,6 +1082,14 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
                                 (b["bbox"][3] - b["bbox"][1]))
                     owners[id(char)] = owner["id"]
             for block in page_info["blocks"]:
+                block["source_link_uris"] = [
+                    link["uri"] for link in page.hyperlinks
+                    if link.get("uri")
+                    and float(link["top"]) < float(block["bbox"][3])
+                    and float(link["bottom"]) > float(block["bbox"][1])
+                    and float(link["x0"]) < float(block["bbox"][2])
+                    and float(link["x1"]) > float(block["bbox"][0])
+                ]
                 selected_raw = [
                     char
                     for char in page.chars

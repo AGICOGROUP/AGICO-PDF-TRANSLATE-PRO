@@ -78,6 +78,10 @@ then shrink only the genuinely overflowing unit. Preserve color and orientation.
 Render every selected candidate page for initial review. Compare full meaning
 against source, then inspect changed regions and anomalies at high zoom. Cached
 clean bases/page PDFs and unchanged review evidence remain usable by identity.
+Unreadable page caches rebuild locally. If optional object deduplication exceeds
+the PDF library's decompression limit, the builder copies the verified encoded
+pages without deduplication; do not raise that limit or rerun OCR. This exceptional
+output may be larger, while source binding and visual checks remain required.
 Store actual semantic and visual findings; IDs and OCR confidence are not proof
 of complete detection or correct translation. Readable source-language remnants
 in replacement mode are defects even if their translation is present nearby.

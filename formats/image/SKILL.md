@@ -57,7 +57,13 @@ An optional fifth field for existing IDs supplies source cleanup boxes separated
 by semicolons. Read [compact decisions](../pdf/scan/references/compact-decisions.md)
 only for advanced grouping/rotation/style overrides.
 
-Translate full passages/cells at one role baseline; shrink only a genuinely
+TSV import derives each role's baseline from the median source glyph height,
+converted from OCR coordinates to the original image carrier scale. For rotated
+text it measures across the reading direction. This preserves the source size
+hierarchy instead of imposing PDF-sized defaults on a large image. Located
+supplements participate in the same calculation; explicit typography overrides
+in decisions.json remain authoritative when rows are imported again.
+Translate full passages/cells at that shared role baseline; shrink only a genuinely
 unfittable unit. Keep source text direction. Target layout expansion does not
 expand cleanup: source glyph boxes, table rules, bolts, signatures, logos and
 nearby artwork remain distinct. Readable OCR misses need actual source ownership;
@@ -92,6 +98,11 @@ python scripts/image_job.py finish --job <job> --output <output.jpeg> --candidat
 
 Finish binds real findings to source/candidate hashes and runs this adapter's
 checks; it does not translate or inspect pixels for the agent. Missing/stale
-JPEG composition or human/model reviews fail. It freezes the execution ledger;
-do not pause again. Retain true failed/unverified status for preview delivery.
+JPEG composition or human/model reviews fail. Finish validates the ledger before
+writing review evidence and freezes it on success. Repeating finish revalidates
+the actual candidate without double-pausing. A later build automatically resumes
+the same ledger, preserving its original start and elapsed time; do not start a
+second timer for a repair. If translation or review repair begins before build,
+resume that existing ledger before the earlier work so its time is included.
+Retain true failed/unverified status for preview delivery.
 A whole-image regeneration with changed size/format is not a preservation pass.

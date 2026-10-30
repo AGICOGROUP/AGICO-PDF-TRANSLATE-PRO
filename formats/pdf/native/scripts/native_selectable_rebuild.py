@@ -143,7 +143,7 @@ def horizontal_text_origin(
 
 def infer_block_alignment(block: dict[str, Any], page_width: float) -> str:
     x0, _, x1, _ = [float(value) for value in block["bbox"]]
-    if str(block.get("role", "")) == "running-header" and x0 >= page_width * 0.5:
+    if str(block.get("role", "")) in {"running-header", "footer"} and x0 >= page_width * 0.5:
         return "right"
     if int(block.get("style", {}).get("align", 0)) != 1:
         return "left"
@@ -310,7 +310,11 @@ def resolve_text_container(
         )
         if not right_side_occupied:
             content_right = max(content_right, width - 42.0)
-    if role in {"running-header", "footer"} or alignment == "center":
+    if role == "footer" and alignment == "right":
+        # Footer labels are anchored to their source margin, which need not
+        # coincide with the page's default 24 pt text container.
+        left, right = 24.0, line_box[2] + 1
+    elif role in {"running-header", "footer"} or alignment == "center":
         left, right = 24.0, width - 24.0
     else:
         left, right = max(content_left, line_box[0]), content_right
@@ -406,7 +410,12 @@ def _flow_compatible(previous: dict[str, Any], current: dict[str, Any]) -> bool:
     ).strip()
     current_source = str(current.get("source_text", ""))
     if not reviewed_join and not heading_join and (
-        LIST_ITEM_START_RE.match(current_source) or TOC_ITEM_START_RE.match(current_source)
+        LIST_ITEM_START_RE.match(current_source)
+        or TOC_ITEM_START_RE.match(current_source)
+        # A symbol legend is a list even without numbered/bullet prefixes.
+        # Require a short identifier and prose after '='; equations and long
+        # assignments inside normal paragraphs are not sufficient evidence.
+        or re.match(r"^\s*[A-Za-z][A-Za-z0-9_]{0,7}\s*=\s*[A-Za-z]{2}", current_source)
     ):
         return False
     previous_source = str(previous.get("source_text", "")).strip()
@@ -457,6 +466,11 @@ def apply_reviewed_text_region_adjustments(pages: list[dict[str, Any]]) -> None:
             for block_id in adjustment.get("block_ids", []):
                 block = blocks_by_id.get(str(block_id))
                 if block is not None:
+                    if dy:
+                        # Source decorations/annotations do not move with a
+                        # reviewed text adjustment; their original anchors are
+                        # no longer authoritative for this block.
+                        block["source_geometry_adjusted"] = True
                     shift_geometry(block, dy, set())
 
 
@@ -1423,6 +1437,96 @@ def draw_fitted_text(
     }
 
 
+def draw_contact_footer(pdf, block: dict[str, Any], page_info: dict[str, Any]) -> dict[str, Any] | None:
+    """Anchor contact glyphs to retained decorations; fit translated labels around them."""
+    source = str(block.get("source_text", ""))
+    target = str(block.get("render_translation_override", block.get("translation", "")))
+    if (block.get("source_geometry_adjusted")
+        or len(source.splitlines()) != 1 or len(target.splitlines()) != 1
+        or len(block.get("lines", [])) > 1):
+        return None
+    if block.get("role") != "footer" or not re.search(
+        r"(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2}|https?://|www\.)", source
+    ):
+        return None
+    characters = block.get("characters", [])
+    if not characters or any("baseline" not in char for char in characters):
+        return None
+    baselines = [float(char["baseline"]) for char in characters]
+    if max(baselines) - min(baselines) > 0.1:
+        return None
+    page_height, page_width = float(page_info["height"]), float(page_info["width"])
+    top, bottom = float(block["bbox"][1]), float(block["bbox"][3])
+    obstacles = [other["bbox"] for other in page_info.get("blocks", [])
+                 if other.get("id") != block.get("id") and not other.get("render_suppressed")]
+    obstacles += list(page_info.get("image_boxes", []))
+    obstacles += [cell["bbox"] for cell in page_info.get("table_cells", [])]
+    if any(float(box[1]) < bottom and float(box[3]) > top for box in obstacles):
+        return None
+    selected = characters
+    surrounding = []
+    label_draws = []
+    if target != source:
+        # Restrict translated-label reflow to a single source mailto link.
+        # Other clickable spans would need their own source anchors.
+        links = block.get("source_link_uris", [])
+        if len(links) != 1 or not links[0].startswith("mailto:"):
+            return None
+        email = links[0][7:].split("?", 1)[0]
+        raw = "".join(str(char["text"]) for char in characters)
+        if not email or raw.count(email) != 1 or target.count(email) != 1:
+            return None
+        start = raw.index(email)
+        # PDF character records normally contain a single Unicode character.
+        if any(len(str(char["text"])) != 1 for char in characters):
+            return None
+        selected = characters[start:start + len(email)]
+        prefix, suffix = target.split(email)
+        baseline = float(selected[0]["baseline"])
+        size = float(selected[0]["size"])
+        for text, left, right, alignment in (
+            (prefix.strip(), 24.0, float(selected[0]["bbox"][0]) - 1, "right"),
+            (suffix.strip(), float(selected[-1]["bbox"][2]) + 1, page_width - 24.0, "left"),
+        ):
+            if not text:
+                continue
+            style = dict(block["style"], cjk=bool(CJK_CHAR_RE.search(text)))
+            name = font_key(style)
+            text_width = pdfmetrics.stringWidth(text, name, size)
+            if text_width > right - left:
+                return None
+            origin = horizontal_text_origin(alignment, left, right, text_width)
+            label_draws.append((name, size, origin, baseline, text))
+            surrounding.append([origin, baseline - size, origin + text_width, baseline + size * 0.25])
+    elif CJK_CHAR_RE.search(source):
+        return None
+    # Validate every label before writing anything: unsafe cases use ordinary
+    # layout without leaving a partially painted contact line in the overlay.
+    for name, size, origin, baseline, text in label_draws:
+        pdf.setFont(name, size)
+        color = selected[0].get("color_rgb", [0, 0, 0])
+        pdf.setFillColorRGB(*(float(value) / 255 for value in color))
+        pdf.drawString(origin, page_height - baseline, text)
+    drawn_boxes = []
+    for char in selected:
+        # Per-glyph source positions keep link hit areas and underlines registered.
+        font_name = font_key(dict(char, cjk=False))
+        size = float(char["size"])
+        color = char.get("color_rgb", [0, 0, 0])
+        pdf.setFont(font_name, size)
+        pdf.setFillColorRGB(*(float(value) / 255 for value in color))
+        pdf.drawString(float(char["bbox"][0]), page_height - float(char["baseline"]), str(char["text"]))
+        drawn_boxes.append(list(char["bbox"]))
+    return {
+        "font_size": float(block["style"].get("size", 9)),
+        "source_font_size": float(block["style"].get("size", 9)),
+        "font_name": font_key(dict(block["style"], cjk=False)),
+        "bold": bool(block["style"].get("bold")), "fallback_shrink": False,
+        "rendered": target, "box": list(block["bbox"]),
+        "alignment": "source-glyphs", "drawn_boxes": drawn_boxes + surrounding,
+    }
+
+
 def draw_flow_text(
     pdf: canvas.Canvas,
     pipeline,
@@ -1667,6 +1771,11 @@ def make_overlay(
             continue
         translation = pipeline.prepared_translation(block)
         if not translation:
+            continue
+        contact_draw = draw_contact_footer(pdf, block, page_info)
+        if contact_draw is not None:
+            report.append({"id": block["id"], "page": page_info["page"],
+                           "role": block.get("role"), "draws": [contact_draw]})
             continue
         style = copy.deepcopy(block["style"])
         default_color = tuple(

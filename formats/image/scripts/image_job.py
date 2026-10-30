@@ -44,6 +44,15 @@ def run(script, *args):
     subprocess.run([sys.executable, str(script), *map(str, args)], check=True)
 
 
+def image_session_status(job):
+    """Validate and read the existing ledger without mutating its history."""
+    result = subprocess.run([
+        sys.executable, str(ROOT/'formats/pdf/scripts/session_metrics.py'),
+        'status', '--job', str(job),
+    ], check=True, capture_output=True, text=True, encoding='utf-8')
+    return json.loads(result.stdout)
+
+
 def image_ocr_scale(pixel_size, dpi):
     """Avoid treating a 72-pt/pixel carrier's enlargement as real scan detail."""
     if dpi <= 0 or min(pixel_size) <= 0:
@@ -108,6 +117,34 @@ def prepare(source, job, target, dpi, *, run_ocr=True):
     print_inventory(extraction, metadata)
 
 
+def source_role_styles(page, lines, regions):
+    """One source-sized baseline per role, measured across the glyph direction.
+
+    OCR coordinates may be enlarged while the image carrier remains one point
+    per original pixel. Convert geometry back to carrier points before choosing
+    a baseline; never use a merged paragraph's enclosing height as a font size.
+    """
+    sx = page.get('width_pt', page['pixel_width']) / page['pixel_width']
+    sy = page.get('height_pt', page['pixel_height']) / page['pixel_height']
+    heights = {}
+    for region in regions:
+        if region['role'] == 'preserve':
+            continue
+        for line_id in region['ids']:
+            line = lines[line_id]
+            x0, y0, x1, y1 = line['box']
+            height = ((x1-x0)*sx if float(line.get('rotation', 0)) % 180 == 90
+                      else (y1-y0)*sy)
+            if math.isfinite(height) and height > 0:
+                heights.setdefault(region['role'], []).append(height)
+    styles = {}
+    for role, values in heights.items():
+        # A full line must also accommodate the renderer's baseline spacing.
+        baseline = float(np.median(values)) / 1.12
+        styles[role] = {'max_font': baseline, 'min_font': baseline * 0.65}
+    return styles
+
+
 def import_rows(job, path):
     """Agent-authored TSV: IDs/ranges, role, translation, optional target box.
 
@@ -168,10 +205,21 @@ def import_rows(job, path):
                 x0,y0,x1,y1 = map(float, envelope.split(','))
                 item['clean_boxes'].append([x0*sx,y0*sy,x1*sx,y1*sy])
         regions.append(item)
+    previous = read(job/'manifest/decisions.json')
+    defaults = source_role_styles(page, lines, regions)
+    styles = {role: dict(style) for role, style in defaults.items()}
+    for role, style in previous.get('styles', {}).items():
+        # Recompute our own defaults on reimport while retaining manual edits.
+        prior_defaults = previous.get('source_typography_defaults', {}).get(role, {})
+        overrides = {key: value for key, value in style.items()
+                     if key not in prior_defaults or value != prior_defaults[key]}
+        styles.setdefault(role, {}).update(overrides)
+        if ('max_font' in overrides and 'min_font' not in overrides
+                and styles[role].get('min_font', 0) > overrides['max_font']):
+            styles[role]['min_font'] = overrides['max_font'] * 0.65
     save(job/'manifest/decisions.json', {
-        'source_sha256':extraction['source_sha256'], 'target_language':read(job/'manifest/decisions.json')['target_language'],
-        'styles':{'heading':{'max_font':14,'min_font':7},'body':{'max_font':12,'min_font':6},
-                  'footer':{'max_font':7,'min_font':4}},
+        'source_sha256':extraction['source_sha256'], 'target_language':previous['target_language'],
+        'styles':styles, 'source_typography_defaults':defaults,
         'regions':regions,'supplements':supplements,
     })
 
@@ -185,6 +233,9 @@ def build(job, output):
         raise ValueError('Source changed before image build')
     if expected_format(output) != metadata['format']:
         raise ValueError('Output must use the same image format as the source')
+    if (job/'session-metrics.json').exists() and image_session_status(job)['state'] == 'paused':
+        # A local repair continues the same measured job; never reset its start.
+        run(ROOT/'formats/pdf/scripts/session_metrics.py', 'resume', '--job', job)
     run(SCAN / 'compile_translation.py',
         '--extraction', job / 'extract/extraction-report.json',
         '--draft', job / 'manifest/draft-groups.json',
@@ -436,12 +487,15 @@ def main():
             import_rows(args.job.resolve(), args.rows)
         build(args.job.resolve(), args.output.resolve())
     elif args.command == 'finish':
+        session = image_session_status(args.job)
         record_review(args.job, args.output, args.candidate_sha256, args.review_note)
         report = check(Path(read(args.job/'image-metadata.json')['source_path']),args.job,args.output)
         print(json.dumps(report))
         if not report['passed']:
             return 2
-        run(ROOT/'formats/pdf/scripts/session_metrics.py','pause','--job',args.job)
+        # Revalidating the same candidate is safe and must not double-pause.
+        if session['state'] == 'active':
+            run(ROOT/'formats/pdf/scripts/session_metrics.py','pause','--job',args.job)
     else:
         report = check(args.source.resolve(), args.job.resolve(), args.output.resolve())
         print(json.dumps(report))

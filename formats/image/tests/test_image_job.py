@@ -169,6 +169,72 @@ def jpeg_build_fixture(root):
     return src, output
 
 
+def finish_image_cli(job, output, candidate_hash=None):
+    import subprocess
+    return subprocess.run([
+        sys.executable, str(ROOT/'formats/image/scripts/image_job.py'), 'finish',
+        '--job', str(job), '--output', str(output),
+        '--candidate-sha256', candidate_hash or sha256_file(output),
+        '--reviewed-all-passed', '--review-note',
+        'Synthetic regression fixture: review gate behavior only, not document acceptance',
+    ], capture_output=True, text=True, encoding='utf-8')
+
+
+def test_repeated_finish_revalidates_without_double_pausing(tmp_path):
+    src, output = jpeg_build_fixture(tmp_path)
+    image_job.run(ROOT/'formats/pdf/scripts/session_metrics.py', 'start', '--job', tmp_path,
+                  '--source', src, '--target-language', 'en', '--mode', 'replace', '--pages', 1)
+    image_job.build(tmp_path, output)
+    first = finish_image_cli(tmp_path, output)
+    assert first.returncode == 0, first.stderr
+    frozen = (tmp_path/'session-metrics.json').read_bytes()
+    second = finish_image_cli(tmp_path, output)
+    assert second.returncode == 0, second.stderr
+    assert (tmp_path/'session-metrics.json').read_bytes() == frozen
+    # Repetition is still a real hash/evidence check, not an unconditional no-op.
+    stale = finish_image_cli(tmp_path, output, '0'*64)
+    assert stale.returncode != 0
+    assert (tmp_path/'session-metrics.json').read_bytes() == frozen
+    with Image.open(output) as raw:
+        changed = raw.copy()
+    changed.putpixel((95,95), (0,0,0))
+    changed.save(output, format='JPEG')
+    damaged = finish_image_cli(tmp_path, output)
+    assert damaged.returncode != 0
+    assert not image_job.read(tmp_path/'qa/final-qa.json')['passed']
+    assert (tmp_path/'session-metrics.json').read_bytes() == frozen
+
+
+def test_build_after_finish_resumes_same_timer_before_local_repair(tmp_path):
+    src, output = jpeg_build_fixture(tmp_path)
+    image_job.run(ROOT/'formats/pdf/scripts/session_metrics.py', 'start', '--job', tmp_path,
+                  '--source', src, '--target-language', 'en', '--mode', 'replace', '--pages', 1)
+    image_job.build(tmp_path, output)
+    assert finish_image_cli(tmp_path, output).returncode == 0
+    old = image_job.read(tmp_path/'session-metrics.json')
+    image_job.build(tmp_path, output)
+    new = image_job.read(tmp_path/'session-metrics.json')
+    assert new['events'][:-1] == old['events']
+    assert new['events'][-1]['action'] == 'resume'
+    assert new['events'][0] == old['events'][0]
+    assert finish_image_cli(tmp_path, output).returncode == 0
+    assert image_job.read(tmp_path/'session-metrics.json')['events'][-1]['action'] == 'pause'
+
+
+def test_finish_rejects_invalid_timer_before_writing_passing_review(tmp_path):
+    src, output = jpeg_build_fixture(tmp_path)
+    image_job.run(ROOT/'formats/pdf/scripts/session_metrics.py', 'start', '--job', tmp_path,
+                  '--source', src, '--target-language', 'en', '--mode', 'replace', '--pages', 1)
+    image_job.build(tmp_path, output)
+    ledger = image_job.read(tmp_path/'session-metrics.json')
+    ledger['events'][0]['active_elapsed_seconds'] = 999
+    image_job.save(tmp_path/'session-metrics.json', ledger)
+    result = finish_image_cli(tmp_path, output)
+    assert result.returncode != 0
+    assert not (tmp_path/'review/translation-review.json').exists()
+    assert not (tmp_path/'qa/final-qa.json').exists()
+
+
 def test_real_jpeg_build_accounts_for_encoding_without_pretending_reviews_pass(tmp_path):
     src, output = jpeg_build_fixture(tmp_path)
     image_job.build(tmp_path, output)

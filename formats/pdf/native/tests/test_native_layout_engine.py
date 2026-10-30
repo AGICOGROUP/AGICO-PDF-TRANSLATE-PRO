@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import importlib.util
+import argparse
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from PIL import Image, ImageDraw, ImageFont
+import pdfplumber
 from pypdf import PdfReader
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 
@@ -29,6 +34,106 @@ pipeline = load_module("pdf_translation_pipeline_layout", "pdf_translation_pipel
 
 
 class NativeTextStreamTests(unittest.TestCase):
+    def test_contact_anchor_rejects_multiline_source_target_and_baselines(self):
+        rebuild.register_fonts()
+        email = "a@example.com"
+        item = block("b1", "Email:" + email, "邮箱:" + email,
+                     [100, 270, 180, 278], size=8)
+        item.update(role="footer", source_link_uris=["mailto:" + email])
+        item["characters"] = [{"text": char, "bbox": [100 + i * 4, 270, 104 + i * 4, 278],
+                               "size": 8, "baseline": 276} for i, char in enumerate(email)]
+        page = {"width": 400, "height": 300, "blocks": [item]}
+        for field in ("source_text", "translation"):
+            original = item[field]
+            item[field] += "\nTelephone:123"
+            pdf = Mock()
+            self.assertIsNone(rebuild.draw_contact_footer(pdf, item, page))
+            pdf.drawString.assert_not_called()
+            item[field] = original
+        item["characters"][-1]["baseline"] += 12
+        pdf = Mock()
+        self.assertIsNone(rebuild.draw_contact_footer(pdf, item, page))
+        pdf.drawString.assert_not_called()
+
+    def test_contact_anchor_rejects_reviewed_geometry_shift(self):
+        rebuild.register_fonts()
+        email = "a@example.com"
+        item = block("b1", email, "邮箱:" + email, [100, 270, 180, 278], size=8)
+        item.update(role="footer", source_link_uris=["mailto:" + email])
+        item["characters"] = [{"text": char, "bbox": [100 + i * 4, 270, 104 + i * 4, 278],
+                               "size": 8, "baseline": 276} for i, char in enumerate(email)]
+        page = {"width": 400, "height": 300, "blocks": [item],
+                "reviewed_text_region_adjustments": [{"block_ids": ["b1"], "dy": 10}]}
+        rebuild.apply_reviewed_text_region_adjustments([page])
+        pdf = Mock()
+        self.assertIsNone(rebuild.draw_contact_footer(pdf, item, page))
+        pdf.drawString.assert_not_called()
+
+    def test_contact_anchor_rejects_missing_and_rotated_baselines(self):
+        raw = {"text": "a", "top": 270, "y1": 30, "size": 8}
+        self.assertNotIn("baseline", pipeline.character_record(raw))
+        raw["matrix"] = (0, 1, -1, 0, 100, 24)
+        self.assertNotIn("baseline", pipeline.character_record(raw))
+        raw["matrix"] = (1, 0, 0, 1, 100, 24)
+        self.assertEqual(276, pipeline.character_record(raw)["baseline"])
+
+    def test_contact_anchor_fallback_does_not_partially_paint_or_overlap_neighbor(self):
+        email = "a@example.com"
+        item = block("b1", email, "邮箱：" + email + "网站：" + "long" * 200,
+                     [100, 270, 180, 278], size=8)
+        item["role"] = "footer"
+        item["source_link_uris"] = ["mailto:" + email]
+        item["characters"] = [{"text": char, "bbox": [100 + i * 4, 270, 104 + i * 4, 278],
+                               "size": 8, "baseline": 276}
+                              for i, char in enumerate(email)]
+        page = {"width": 400, "height": 300, "blocks": [item]}
+        pdf = Mock()
+        rebuild.register_fonts()
+        self.assertIsNone(rebuild.draw_contact_footer(pdf, item, page))
+        pdf.drawString.assert_not_called()
+        item["translation"] = "邮箱：" + email
+        page["blocks"].append(block("b2", "neighbor", "neighbor", [20, 270, 90, 278], size=8))
+        self.assertIsNone(rebuild.draw_contact_footer(pdf, item, page))
+        pdf.drawString.assert_not_called()
+
+    def test_translated_contact_labels_preserve_email_baseline_link_and_underline(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source, manifest_path, output = root / "source.pdf", root / "manifest.json", root / "output.pdf"
+            email = "info@example.com"
+            source_text = f"E: {email}, W: www.example.com"
+            pdf = canvas.Canvas(str(source), pagesize=(400, 300))
+            pdf.setFont("Helvetica", 8)
+            pdf.drawString(100, 24, source_text)
+            email_left = 100 + pdfmetrics.stringWidth("E: ", "Helvetica", 8)
+            email_right = email_left + pdfmetrics.stringWidth(email, "Helvetica", 8)
+            pdf.rect(email_left, 22.5, email_right - email_left, 0.4, stroke=0, fill=1)
+            pdf.linkURL("mailto:" + email, (email_left, 22, email_right, 31), relative=0)
+            pdf.save()
+            pipeline.extract_command(argparse.Namespace(input=str(source), manifest=str(manifest_path),
+                                                       source_language="en", target_language="zh"))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            item = manifest["pages"][0]["blocks"][0]
+            item["translation"] = f"邮箱：{email}，网站：www.example.com"
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            rebuild.rebuild(source, manifest_path, output, ROOT / "scripts" / "pdf_translation_pipeline.py")
+            with pdfplumber.open(source) as before, pdfplumber.open(output) as after:
+                a, b = before.pages[0], after.pages[0]
+                def email_chars(page):
+                    raw = "".join(char["text"] for char in page.chars)
+                    start = raw.index(email)
+                    return page.chars[start:start + len(email)]
+                for original, rebuilt in zip(email_chars(a), email_chars(b)):
+                    self.assertAlmostEqual(original["x0"], rebuilt["x0"], places=2)
+                    self.assertAlmostEqual(original["matrix"][5], rebuilt["matrix"][5], places=2)
+                self.assertEqual(a.hyperlinks[0]["uri"], b.hyperlinks[0]["uri"])
+                self.assertEqual(a.hyperlinks[0]["x0"], b.hyperlinks[0]["x0"])
+                self.assertEqual(a.rects[0]["x0"], b.rects[0]["x0"])
+                self.assertEqual(a.rects[0]["top"], b.rects[0]["top"])
+                text = b.extract_text()
+                self.assertIn("邮箱", text)
+                self.assertIn("网站", text)
+
     def test_role_classifier_reclassifies_unsupported_ocr_artifact_role(self):
         pages = [{"page": 1, "width": 200, "height": 300, "blocks": [{
             "id": "p0001-b0001", "bbox": [20, 100, 40, 110],
@@ -534,6 +639,31 @@ class AlignmentTests(unittest.TestCase):
 
 
 class ParagraphFlowTests(unittest.TestCase):
+    def test_symbol_definition_rows_remain_separate_with_wrapped_continuation(self):
+        texts = ["General equipment form", "X=Area Code", "AA=Equipment Code",
+                 "Y=Train Number (1, 2, etc)", "BB=Serial Number (2 digits)",
+                 "C=Suffix in alphabetic letters", "if necessary"]
+        blocks = [block(f"b{i}", text, text, [90, 400 + i * 12, 310, 410 + i * 12], size=10)
+                  for i, text in enumerate(texts)]
+        page = {"page": 1, "width": 612, "height": 792, "table_cells": [],
+                "image_boxes": [], "blocks": blocks}
+        flows = rebuild.group_paragraph_flows(page)
+        self.assertEqual([["b0"], ["b1"], ["b2"], ["b3"], ["b4"], ["b5", "b6"]],
+                         [flow["block_ids"] for flow in flows])
+
+    def test_numeric_equation_does_not_force_a_new_paragraph(self):
+        first = block("b0", "The relation is", "The relation is", [90, 400, 310, 410], size=10)
+        second = block("b1", "x=2 + y", "x=2 + y", [90, 412, 310, 422], size=10)
+        self.assertTrue(rebuild._flow_compatible(first, second))
+
+    def test_right_footer_keeps_source_right_edge_and_alignment(self):
+        item = block("b0", "Page 9 of 37", "Page 9 of 37", [472, 727, 522, 737], size=10)
+        item["role"] = "footer"
+        page = {"page": 1, "width": 612, "height": 792, "blocks": [item]}
+        self.assertEqual("right", rebuild.infer_block_alignment(item, 612))
+        box = rebuild.resolve_text_container(page, item, item["lines"][0])
+        self.assertAlmostEqual(522, rebuild.horizontal_text_origin("right", box[0] + 1, box[2] - 1, 0))
+
     def test_reviewed_flow_group_can_join_sentences_for_page_reflow(self):
         group = require(rebuild, "group_paragraph_flows")
         first = block("p0001-b0001", "第一句。", "First sentence.", [60, 100, 520, 112], size=10.5)
