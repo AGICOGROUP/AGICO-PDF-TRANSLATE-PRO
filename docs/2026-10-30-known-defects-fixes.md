@@ -33,7 +33,7 @@
 
 本次消除已定位的返工和运行故障，未证明所有任务稳定在 180 秒以内，也不宣称普遍准确率提升。自动续页属于尚未实现的功能缺口，本轮没有新增分页引擎；既有“文字膨胀允许续页”的政策及不绕过门禁的要求保留。
 
-本地证据在 `jobs/fixes-20261030/`：`image-font/verification.json`、`cache/large-raster-result.json`、`native-layout/evidence.json`、`native-cell-alignment/evidence.json`、`verification/full-suite.xml`。诊断产物和客户原文不提交 GitHub。
+本地证据在 `jobs/fixes-20261030/`：`image-font/verification.json`、`cache/large-raster-result.json`、`native-layout/evidence.json`、`native-cell-alignment/evidence.json`、`verification/final-installed-main.xml`。诊断产物和客户原文不提交 GitHub。
 
-首轮修复全量回归：**592 passed、24 subtests passed，72.75 秒**；补齐单元格对齐后，完整 native 测试 **180 passed、10 subtests passed**，发布前还将验证最终全量结果。
-命令：`python -m pytest -q --junitxml=jobs/fixes-20261030/verification/full-suite.xml`。发布时还须在本机实际安装目录再次验证，避免只验证开发检出。
+最终代码已合并到本机实际安装目录 `D:/AGICO-PDF-TRANSLATE-PRO`，完整回归：**595 passed、27 subtests passed，65.90 秒**。
+在该目录运行 `python -m pytest -q --junitxml=<对比工作区>/jobs/fixes-20261030/verification/final-installed-main.xml`。该结果覆盖最终单元格补丁；先前 592 项结果只作为修复过程记录保留。
