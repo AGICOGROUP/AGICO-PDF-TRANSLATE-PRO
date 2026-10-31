@@ -51,6 +51,15 @@ content or silently preserve readable prose to avoid translating it.
 
 ## Review every page after translation
 
+Prioritize Chinese ↔ English: for Chinese→English preserve complete conditions,
+technical terms and readable typography when wording expands; for English→Chinese
+preserve qualifiers, negation and values in fluent Chinese without shrinking
+unrelated text. Record the actual language pair. Russian, Spanish, French and
+Portuguese use the same content/format acceptance, with script-capable OCR/fonts.
+Check omissions in the actual source language. Chinese residue detection is not
+a language detector or proof that English/Spanish/French/Portuguese prose was
+translated; shared Latin characters require contextual source-to-target review.
+
 After the translations are populated, perform a separate source-to-target
 accuracy pass over every selected page, not just samples or anomaly pages.
 Review the page as a coherent whole and account for every readable source item,

@@ -81,3 +81,14 @@ def test_maximum_only_override_does_not_create_an_invalid_minimum(tmp_path):
     styles = json.loads((job / 'manifest/decisions.json').read_text(encoding='utf-8'))['styles']
     assert styles['body']['max_font'] == 20
     assert styles['body']['min_font'] <= 20
+
+
+def test_row_reimport_keeps_established_source_language(tmp_path):
+    job, rows = write_job(tmp_path)
+    path = job/'manifest/decisions.json'
+    decisions = json.loads(path.read_text(encoding='utf-8'))
+    decisions['source_language'] = 'en-US'
+    path.write_text(json.dumps(decisions), encoding='utf-8')
+    import_rows(job, rows)
+    import_rows(job, rows)
+    assert json.loads(path.read_text(encoding='utf-8'))['source_language'] == 'en-US'

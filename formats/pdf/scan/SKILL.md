@@ -53,6 +53,19 @@ markers with their own item and separate columns/cells. When a missed fragment i
 recovered, repair the complete passage, its IDs, cleanup and translation together.
 Use `scripts/glossary_lookup.py` for cement-terminology.md, including English
 lookup where relevant; retain the selected sense and technical values.
+Record the visually established source code in decisions.json `source_language`
+(for example `zh` or `en`), separately from `target_language`. The compiler
+retains that binding. Chinese→English still checks CJK residue; English→Chinese
+accepts Chinese target glyphs. A confirmed non-CJK original with no observed CJK
+does not need unrelated whole-document Chinese OCR. Unknown source metadata or
+observed CJK keeps conservative checking. Every language pair still requires full
+semantic/visual review; skipping this script-specific check does not prove absence
+of untranslated prose. QA reports whether the CJK check actually ran.
+Its per-page OCR checkpoints bind rendered pixels, source-page mapping, active
+models/config, runtime and code. Rechecking unchanged pages does not load ONNX;
+changed pages or OCR settings invalidate their measurements. These checkpoints
+never replace current candidate-bound semantic/visual acceptance. Fresh tests
+must use new job directories.
 
 ```powershell
 python scripts/compile_translation.py --extraction <job>/extract/extraction-report.json --draft <job>/draft-groups.json --decisions <job>/decisions.json --output <job>/translation-manifest.json

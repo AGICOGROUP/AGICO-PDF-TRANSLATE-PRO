@@ -20,6 +20,14 @@ def compile_translation(extraction: dict, draft: dict, decisions: dict) -> dict:
     manifest = {k: copy.deepcopy(extraction[k]) for k in
                 ('source', 'source_sha256', 'selected_pages', 'pages', 'source_lines')}
     manifest['target_language'] = decisions['target_language']
+    recorded_languages = [value for value in (extraction.get('source_language'),
+                                               decisions.get('source_language')) if value is not None]
+    if any(not isinstance(value, str) or not value.strip() for value in recorded_languages):
+        raise ValueError('Invalid source language; use a nonempty language code')
+    if len({value.strip().lower().replace('_', '-').split('-')[0] for value in recorded_languages}) > 1:
+        raise ValueError('Conflicting source language in extraction and decisions')
+    if recorded_languages:
+        manifest['source_language'] = recorded_languages[-1].strip()
     manifest['source_lines'].extend(copy.deepcopy(decisions.get('supplements', [])))
     lines = {line['id']: line for line in manifest['source_lines']}
     groups = {group['id']: group for group in draft['groups']}

@@ -219,6 +219,7 @@ def import_rows(job, path):
             styles[role]['min_font'] = overrides['max_font'] * 0.65
     save(job/'manifest/decisions.json', {
         'source_sha256':extraction['source_sha256'], 'target_language':previous['target_language'],
+        **({'source_language': previous['source_language']} if 'source_language' in previous else {}),
         'styles':styles, 'source_typography_defaults':defaults,
         'regions':regions,'supplements':supplements,
     })

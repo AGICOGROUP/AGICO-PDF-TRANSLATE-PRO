@@ -13,6 +13,12 @@ existing adapter scripts extract, place text, build and measure the result.
 
 ## Start with the request and original
 
+Chinese ↔ English is the primary optimization and acceptance path. Russian,
+Spanish, French and Portuguese remain supported secondary languages. Establish
+the actual source and requested target; never assume all originals are Chinese
+or that every translation must end in Chinese. Mixed-language source passages
+remain part of the same complete translation.
+
 A named single-language result ("翻译为中文版/英文版") means `replace`.
 An affirmative request to add translation, retain original, or make a bilingual
 version means `bilingual`, including "翻译成中文，保留原文". Respect negation.

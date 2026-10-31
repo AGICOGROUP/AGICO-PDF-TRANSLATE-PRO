@@ -6,6 +6,9 @@ import json
 import math
 import re
 import subprocess
+import tempfile
+import warnings
+from importlib.metadata import version
 from pathlib import Path
 
 import pdfplumber
@@ -14,16 +17,26 @@ from pypdf import PdfReader
 
 from contracts import ManifestError, validate_manifest
 from audit_scan_inventory import audit_inventory
-from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records
+from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records, ocr_runtime_signature
 
 
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
-def requires_cjk_residual_gate(target_language: str) -> bool:
-    """CJK is source residue only when the requested output is non-CJK."""
+def requires_cjk_residual_gate(target_language: str, source_language: str = "",
+                               source_lines: list[dict] | None = None) -> bool:
+    """Use source evidence; a non-CJK target alone does not imply Chinese input."""
     language = str(target_language or "").lower().replace("_", "-")
-    return not language.startswith(("zh", "ja", "ko"))
+    if language.startswith(("zh", "ja", "ko")):
+        return False
+    if any(CJK_RE.search(str(line.get('text', ''))) for line in source_lines or []):
+        return True
+    from ocr_language_guard import LANGUAGE_SCRIPT
+    source = str(source_language or '').lower().replace('_', '-').split('-')[0]
+    script = LANGUAGE_SCRIPT.get(source)
+    # Missing/unknown metadata keeps the legacy conservative inspection. Known
+    # Chinese/Japanese sources still require it even if OCR missed their script.
+    return script is None or script == 'CJK'
 OFFICIAL_BUILDER = "PDF-TRANSLATE-PRO-SCAN"
 
 
@@ -475,17 +488,58 @@ def inspect_font_embedding(reader: PdfReader) -> list[str]:
 
 def residual_cjk_ocr(pdf_path: Path, output_dir: Path, source_pages: list[int]) -> list[dict]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    prefix = output_dir / "page"
+    render_dir = output_dir / ('render-' + sha256_file(pdf_path)[:16])
+    render_dir.mkdir(exist_ok=True)
+    prefix = render_dir / "page"
     command = [find_pdftoppm(), "-r", "200", "-png", str(pdf_path), str(prefix)]
     subprocess.run(command, check=True, capture_output=True)
-    from rapidocr_onnxruntime import RapidOCR
-
-    engine = RapidOCR()
+    images = sorted(render_dir.glob('page-*.png'),
+                    key=lambda path: int(path.stem.rsplit('-', 1)[1]))
+    if len(images) != len(source_pages):
+        raise ValueError('Residual OCR render page count does not match source mapping')
+    runtime = {'models': ocr_runtime_signature(),
+               'rapidocr': version('rapidocr-onnxruntime'), 'onnxruntime': version('onnxruntime'),
+               'verify_code': sha256_file(Path(__file__)),
+               'ocr_code': sha256_file(Path(__file__).with_name('extract_scan.py'))}
+    checkpoints = output_dir / 'ocr-checkpoints'
+    checkpoints.mkdir(exist_ok=True)
+    engine = None
     residual = []
-    for index, image_path in enumerate(sorted(output_dir.glob("page-*.png"))):
+    for index, image_path in enumerate(images):
+        identity = {'render_sha256': sha256_file(image_path), 'source_page': source_pages[index],
+                    'runtime': runtime, 'dpi': 200, 'scales': [1.0, 2.0]}
+        checkpoint = checkpoints / f'page-{index+1:04d}.json'
+        records = None
+        try:
+            cached = json.loads(checkpoint.read_text(encoding='utf-8'))
+            payload = json.dumps(cached['records'], sort_keys=True, ensure_ascii=False, allow_nan=False)
+            if (cached.get('identity') == identity and isinstance(cached['records'], list)
+                    and cached.get('records_sha256') == hashlib.sha256(payload.encode('utf-8')).hexdigest()):
+                records = cached['records']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         with Image.open(image_path) as loaded:
             image = loaded.convert("RGB")
-        records = merge_ocr_records(_ocr_pass(engine, image, 1.0) + _ocr_pass(engine, image, 2.0))
+        if records is None:
+            if engine is None:
+                from rapidocr_onnxruntime import RapidOCR
+                engine = RapidOCR()
+            records = merge_ocr_records(_ocr_pass(engine, image, 1.0) + _ocr_pass(engine, image, 2.0))
+            payload = json.dumps(records, sort_keys=True, ensure_ascii=False, allow_nan=False)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=checkpoints,
+                                                  prefix='.qa-ocr-', suffix='.tmp', delete=False) as stream:
+                    temporary = Path(stream.name)
+                    json.dump({'identity': identity, 'records': records,
+                               'records_sha256': hashlib.sha256(payload.encode('utf-8')).hexdigest()},
+                              stream, ensure_ascii=False, allow_nan=False)
+                temporary.replace(checkpoint)
+            except OSError as error:
+                warnings.warn(f'Residual OCR checkpoint not saved: {error}', RuntimeWarning)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
         for record in records:
             if CJK_RE.search(record["text"]):
                 residual.append(
@@ -499,6 +553,7 @@ def residual_cjk_ocr(pdf_path: Path, output_dir: Path, source_pages: list[int]) 
                         "page_pixel_height": image.height,
                     }
                 )
+        image.close()
     return residual
 
 
@@ -622,7 +677,10 @@ def main() -> None:
         orientation_failures=rendered_orientation_failures,
     )
     residual = []
-    if requires_cjk_residual_gate(manifest.get("target_language", "")):
+    cjk_check_required = requires_cjk_residual_gate(
+        manifest.get("target_language", ""), manifest.get('source_language', ''),
+        manifest.get('source_lines', []))
+    if cjk_check_required:
         residual = residual_cjk_ocr(
             pdf_path,
             Path(args.report).resolve().parent / "qa-ocr-render",
@@ -653,6 +711,11 @@ def main() -> None:
             "output": str(pdf_path),
             "output_sha256": output_hash,
             "selected_source_pages": manifest["selected_pages"],
+            "source_language": manifest.get('source_language'),
+            "cjk_residual_check": {
+                "performed": cjk_check_required,
+                "scope": "CJK residue only; other source-language omissions require semantic/visual review",
+            },
             "reviewed_ocr_false_positives": matched_false_positives,
             "unmatched_reviewed_ocr_false_positives": [
                 item for item in reviewed_false_positives if item not in matched_false_positives

@@ -6,6 +6,12 @@ The manifest contains all selected pages and their source lines/blocks,
 retaining original source page numbers. Record `preserve_raster` throughout
 `page-plan.json`.
 
+Record `source_language` as the visually established source language code (such
+as `zh`, `en`, `es`, `ru`, `fr` or `pt`), independently from `target_language`.
+The compact compiler retains it and rejects conflicting extraction/decision
+bindings. Legacy manifests without it remain valid but use conservative residue
+checking. Mixed source passages must still be fully inventoried and translated.
+
 Each page may carry `ocr_review_candidates` copied from extraction. These are
 suspected omissions, not accepted source lines: `id`, pixel `box`, `reason`,
 `ocr_attempts`, and optional rejected `text`/`score`/`quad`. Keep the metadata in
