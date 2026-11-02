@@ -51,8 +51,11 @@ read adapter-specific schemas only when producing their artifact.
 - Use the bundled cement terminology 2.0 meanings and contextual aliases. For
   relevant English source terms, use the English lookup rather than assuming a
   Chinese-only scan proves absence. Unreviewed entries retain their caveats.
-- The source image/vector geometry is authoritative. A translated photograph or
-  diagram must not silently become a regenerated lookalike or a summary panel.
+- The source image/vector geometry is authoritative. In replacement mode, put
+  translated diagram labels and legends at their original locations, cleaning
+  only the original text. Do not move them into an external comparison table
+  to save time. A translated photograph or diagram must not silently become a
+  regenerated lookalike or a summary panel.
 - Compare source coverage with visible source pixels, not only recognized IDs.
   Readable missing labels need located supplements; genuinely blurry content
   gets at most two attempts and a disclosed source limitation if still unreadable.
@@ -61,9 +64,11 @@ read adapter-specific schemas only when producing their artifact.
   For PDFs, necessary translation expansion may instead use continuation pages
   under [PDF pagination](references/pdf-pagination.md); preserve formatting.
 
-Inspect every selected output page once, then only changed regions and anomalies
-after local repair. Save actual hash-bound semantic and visual findings. Build
-success, OCR confidence and text counts never establish semantic correctness.
+For scan-heavy reports and repeated forms, use the applicable
+[efficiency guidance](references/scan-report-efficiency.md) within the selected
+adapter. Inspect every selected output page once, then only changed regions and
+anomalies after local repair. Save actual hash-bound semantic and visual findings.
+Build success, OCR confidence and text counts never establish semantic correctness.
 
 ## Time and handoff
 

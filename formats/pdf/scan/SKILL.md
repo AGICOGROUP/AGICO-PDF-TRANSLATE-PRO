@@ -18,6 +18,10 @@ Use [manifest schema](references/manifest-schema.md) when writing a manifest and
 [compact decisions](references/compact-decisions.md) rather than hand-expanding
 routine block JSON. Commands below run from this adapter.
 
+For scan-heavy report pages or repeated forms, apply the shared
+[efficiency guidance](../../../references/scan-report-efficiency.md) without
+changing this adapter's artifact contract or acceptance.
+
 ## Extract once and establish coverage
 
 ```powershell

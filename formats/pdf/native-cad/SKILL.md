@@ -11,6 +11,10 @@ input use their own returned adapters. Read shared
 [translation review](../../../references/page-context-translation-review.md) and
 [delivery policy](../../../references/delivery-policy.md).
 
+For scan-heavy report pages or repeated forms, apply the shared
+[efficiency guidance](../../../references/scan-report-efficiency.md) without
+changing this adapter's artifact contract or acceptance.
+
 ## Prepare a source-bound job
 
 Commands run from this adapter:
