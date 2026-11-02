@@ -7,6 +7,10 @@ native, scan, bilingual and native-CAD pipeline boundaries and acceptance.
 - Inspect whole source pages first. A photograph containing only reviewed
   identifiers/depth values needs preservation, not prose OCR and translation.
   Readable captions, labels and ordinary prose still require translation.
+- Preserve encoded source PDF backgrounds with local text cleanup patches through
+  the official scan builder. OCR render resolution must not silently become the
+  resolution/encoding of a newly embedded full-page image. Inspect first-candidate
+  image bytes, fallback counts and delivery readiness before final assembly.
 - Start with one adequate-resolution source OCR pass. Work in complete paragraphs
   and cells; repair clear missed continuation lines in their complete passage.
   Do not tile and rerun the whole document merely because one map is faint.

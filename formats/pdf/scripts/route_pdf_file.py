@@ -144,6 +144,16 @@ def classify_document_kind(
         or count / max((width * height) / 1_000_000, 1) <= 1000
         for (width, height), count in zip(page_sizes, native_char_counts)
     )
+    # A report can contain an isolated plan/map appendix. Sparse native text is
+    # also normal for scans and cannot turn the whole report into a CAD drawing.
+    drawing_pages = set(large_landscape_pages)
+    drawing_pages.update(index for index in sparse_landscape_pages(page_sizes, native_char_counts)
+                         if (path_counts or {}).get(index, 0) >= DRAWING_PATH_COUNT)
+    drawing_pages.update(index for index, (width, height) in enumerate(page_sizes, 1)
+                         if max(width, height) / max(min(width, height), 1) >= 1.9
+                         and width * height >= 1_400_000)
+    if len(page_sizes) >= 5 and drawing_pages and len(drawing_pages) * 5 < len(page_sizes):
+        return "document", ["isolated_drawing_attachments"]
     if large_landscape_pages and low_prose_density:
         return "engineering-drawing", [
             "large_landscape_sheet",

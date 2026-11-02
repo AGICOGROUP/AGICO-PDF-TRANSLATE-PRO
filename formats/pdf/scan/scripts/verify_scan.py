@@ -331,6 +331,8 @@ def evaluate_evidence(
     if dismissed_overlaps:
         report['warnings']['reviewed_overlap_false_positives'] = dismissed_overlaps
     report["unreadable_text_failures"] = visual_review.get("unreadable_text_failures", [])
+    report['delivery_ready'] = build_report.get('delivery_ready', True)
+    report['size_evidence'] = build_report.get('size_evidence', {})
     report["passed"] = all(
         [
             not report["manifest_error"],
@@ -354,6 +356,7 @@ def evaluate_evidence(
             not report["orientation_mismatch_failures"],
             not report["unassigned_source_lines"],
             report["official_pipeline"],
+            report['delivery_ready'],
         ]
     )
     return report

@@ -29,7 +29,10 @@ every page and retains the pypdf malformed/encrypted-file checks.
 `native-text`, `mixed`, `scan-only` are content classes. `native-cad` is an adapter,
 not a fourth content class. Native/mixed drawings use bilingual only for `auto`
 or explicit `bilingual`. A single-language target uses replacement, including
-engineering sheets. Raster pages within a genuinely mixed PDF stay in its one
+engineering sheets. An isolated oversized map/plan in a longer report does not classify the whole
+document as an engineering drawing. The router records that attachment evidence;
+translate its labels in place within the report's selected adapter.
+Raster pages within a genuinely mixed PDF stay in its one
 selected adapter. All scan-only pages preserve their raster bases.
 
 When translation expansion cannot fit readably, all PDF adapters follow the

@@ -1,0 +1,147 @@
+import hashlib
+import io
+import sys
+from pathlib import Path
+
+import numpy as np
+import pymupdf
+import pytest
+from PIL import Image
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+import build_scan
+
+
+def jpeg_manifest(tmp_path, hidden=False):
+    rng = np.random.default_rng(4321)
+    pixels = np.clip(rng.normal(230, 12, (1000, 800, 3)), 0, 255).astype('uint8')
+    pixels[30:50, 30:130] = 0
+    stream = io.BytesIO()
+    Image.fromarray(pixels).save(stream, format='JPEG', quality=65)
+    source = tmp_path / 'source.pdf'
+    c = canvas.Canvas(str(source), pagesize=(400, 500))
+    c.drawImage(ImageReader(stream), 0, 0, width=400, height=500)
+    if hidden:
+        text = c.beginText(20, 400)
+        text.setTextRenderMode(3)
+        text.textLine('old hidden source')
+        c.drawText(text)
+    c.save()
+    render = tmp_path / 'render.png'
+    with pymupdf.open(source) as doc:
+        doc[0].get_pixmap(matrix=pymupdf.Matrix(2, 2)).save(render)
+    return {'source': str(source), 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+            'selected_pages': [1], 'target_language': 'en',
+            'pages': [{'source_page': 1, 'render_path': str(render), 'width_pt': 400,
+                       'height_pt': 500, 'pixel_width': 800, 'pixel_height': 1000}],
+            'source_lines': [{'id': 'l1', 'page': 1, 'text': 'old', 'box': [30, 30, 130, 50]}],
+            'blocks': [{'id': 'b1', 'page': 1, 'source_line_ids': ['l1'], 'source': 'old',
+                        'translation': 'Translated', 'status': 'translated', 'action': 'replace',
+                        'role': 'body', 'box': [30, 30, 300, 75], 'clean_box': [29, 29, 131, 51],
+                        'background': [230, 230, 230], 'rotation': 0}]}
+
+
+def test_jpeg_bytes_survive_and_only_local_region_changes(tmp_path):
+    manifest = jpeg_manifest(tmp_path)
+    output = tmp_path / 'out.pdf'
+    report = build_scan.build_pdf(manifest, output)
+    with pymupdf.open(manifest['source']) as source, pymupdf.open(output) as target:
+        original = source.extract_image(source[0].get_images()[0][0])['image']
+        images = [target.extract_image(x[0])['image'] for x in target[0].get_images()]
+        assert original in images, 'Original JPEG was expanded into a new full-page image'
+        a = np.frombuffer(source[0].get_pixmap().samples, np.uint8).reshape(500, 400, 3)
+        b = np.frombuffer(target[0].get_pixmap().samples, np.uint8).reshape(500, 400, 3)
+        assert np.array_equal(a[100:], b[100:])
+        assert 'Translated' in target[0].get_text()
+    assert output.stat().st_size < Path(manifest['source']).stat().st_size * 2
+    assert report['pages'][0]['background_encoding'] == 'original_pdf_with_local_patches'
+
+
+def test_hidden_ocr_removed_without_reencoding_source(tmp_path):
+    manifest = jpeg_manifest(tmp_path, hidden=True)
+    output = tmp_path / 'out.pdf'
+    build_scan.build_pdf(manifest, output)
+    with pymupdf.open(output) as target:
+        assert 'old hidden source' not in target[0].get_text()
+        assert any(target.extract_image(x[0])['ext'] == 'jpeg' for x in target[0].get_images())
+
+
+def test_source_hash_checked_even_on_cached_repair(tmp_path):
+    manifest = jpeg_manifest(tmp_path)
+    build_scan.build_pdf(manifest, tmp_path / 'out.pdf')
+    source = Path(manifest['source'])
+    source.write_bytes(source.read_bytes() + b'\nchanged')
+    with pytest.raises(ValueError, match='source PDF hash mismatch'):
+        build_scan.build_pdf(manifest, tmp_path / 'out.pdf')
+
+
+def test_untouched_scan_does_not_build_full_page_png(tmp_path, monkeypatch):
+    manifest = jpeg_manifest(tmp_path)
+    manifest['blocks'][0]['action'] = 'preserve'
+    manifest['blocks'][0]['status'] = 'preserve_confirm'
+    def unwanted(*args):
+        raise AssertionError('Untouched encoded background should not be cleaned')
+    monkeypatch.setattr(build_scan, 'prepare_clean_base', unwanted)
+    out = tmp_path / 'out.pdf'
+    build_scan.build_pdf(manifest, out)
+    with pymupdf.open(manifest['source']) as a, pymupdf.open(out) as b:
+        assert a[0].get_pixmap().samples == b[0].get_pixmap().samples
+
+
+def test_channel_limit_keeps_artifact_but_blocks_delivery(tmp_path):
+    manifest = jpeg_manifest(tmp_path)
+    output = tmp_path / 'out.pdf'
+    report = build_scan.build_pdf(manifest, output, max_output_bytes=100)
+    assert output.is_file()
+    assert report['delivery_ready'] is False
+    assert report['size_evidence']['over_delivery_limit'] is True
+    assert report['size_evidence']['output_image_stream_bytes'] > 0
+
+
+def test_repair_matches_cold_and_preserves_jpeg(tmp_path):
+    manifest = jpeg_manifest(tmp_path)
+    output = tmp_path / 'out.pdf'
+    build_scan.build_pdf(manifest, output)
+    manifest['blocks'][0]['translation'] = 'Repaired'
+    build_scan.build_pdf(manifest, output)
+    build_scan.build_pdf(manifest, tmp_path / 'cold.pdf', use_page_cache=False)
+    with pymupdf.open(output) as a, pymupdf.open(tmp_path / 'cold.pdf') as b:
+        assert a[0].get_pixmap().samples == b[0].get_pixmap().samples
+        assert 'Repaired' in a[0].get_text()
+
+
+def test_visible_native_glyphs_use_lossless_fallback_instead_of_disappearing(tmp_path):
+    manifest = jpeg_manifest(tmp_path)
+    path = Path(manifest['source'])
+    with pymupdf.open(path) as source:
+        source[0].insert_text((30, 200), 'Original visible logo')
+        changed = source.tobytes()
+    path.write_bytes(changed)
+    manifest['source_sha256'] = hashlib.sha256(changed).hexdigest()
+    with pymupdf.open(path) as source:
+        source[0].get_pixmap(matrix=pymupdf.Matrix(2, 2)).save(manifest['pages'][0]['render_path'])
+    output = tmp_path / 'out.pdf'
+    report = build_scan.build_pdf(manifest, output)
+    assert report['pages'][0]['background_encoding'] == 'lossless_render_fallback'
+    with pymupdf.open(path) as a, pymupdf.open(output) as b:
+        # Original painted glyphs survive as raster pixels, not stale native text.
+        clip = pymupdf.Rect(15, 180, 200, 210)
+        assert a[0].get_pixmap(matrix=pymupdf.Matrix(2, 2), clip=clip).samples == b[0].get_pixmap(matrix=pymupdf.Matrix(2, 2), clip=clip).samples
+
+
+def test_abnormal_growth_is_a_delivery_review_not_silent_success(tmp_path):
+    source = tmp_path / 'small.pdf'
+    source.write_bytes(b'x' * 1000)
+    large = tmp_path / 'large.pdf'
+    # A valid encoded-image PDF is used; the sparse file padding models a large
+    # output without generating a large full-page raster in this unit test.
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(large)
+    with large.open('ab') as stream:
+        stream.write(b'\n%' + b'x' * (11 * 1024**2))
+    evidence = build_scan.output_size_evidence({'source': str(source)}, large)
+    assert evidence['size_review_required'] is True
+    assert evidence['delivery_ready'] is False

@@ -153,6 +153,24 @@ class TextOrientationAndProvenanceTests(unittest.TestCase):
         visual['reviewed_overlap_false_positives'] = [{**candidate, 'reason': ''}]
         self.assertFalse(evaluate_evidence(**kwargs)['passed'])
 
+    def test_undeliverable_build_cannot_pass_qa(self):
+        import verify_scan
+        data = manifest()
+        build = {'builder': verify_scan.OFFICIAL_BUILDER,
+                 'source_sha256': data['source_sha256'],
+                 'manifest_sha256': verify_scan.canonical_manifest_sha256(data),
+                 'output_sha256': 'b' * 64,
+                 'rendered_blocks': [{'id': 'p01-label', 'font_size': 9, 'complete': True}],
+                 'outside_approved_pixel_changes': 0}
+        kwargs = dict(manifest=data, extracted_by_page={1: '视图A'}, build_report=build,
+                      output_page_count=1, geometry_match=True,
+                      visual_review={'all_pages_rendered': True, 'reviewed_changed_regions': True,
+                                     'untranslated_clear_labels': 0},
+                      residual_cjk=[], candidate_sha256='b' * 64)
+        self.assertTrue(evaluate_evidence(**kwargs)['passed'])
+        build['delivery_ready'] = False
+        self.assertFalse(evaluate_evidence(**kwargs)['passed'])
+
     def test_small_font_is_warning_but_actual_unreadability_blocks(self):
         import verify_scan
         data = manifest()

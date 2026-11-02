@@ -21,6 +21,18 @@ candidate IDs are additionally accounted for in the existing semantic review's
 `reviewed_source_ids`. Record non-text decisions or genuine source limitations
 with visual reasons. No candidate record authorizes cleanup on its own.
 
+## Original background and output size
+
+Keep `source` bound to the actual immutable PDF and `source_sha256` correct. The
+builder verifies this file even during cached repairs, preserves encoded scan
+pages with local cleanup patches, and removes stale hidden OCR before adding
+selectable target text. Do not point `source` at a render or omit it to bypass
+preservation. Painted native glyphs, geometry changes or raster-layout adjustments
+use the measured lossless render fallback. No new manifest fields are required.
+The build report owns `background_encoding_counts`, `builder_implementation_sha256`,
+`size_evidence` and `delivery_ready`. The optional CLI `--max-output-mib` binds the
+known channel limit without changing translation or geometry inputs.
+
 ## Orientation and source mapping
 
 Copy each OCR line's `quad` and cardinal `rotation` from the extraction report.

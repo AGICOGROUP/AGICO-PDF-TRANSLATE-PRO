@@ -7,6 +7,8 @@ import math
 import copy
 import time
 import platform
+import sys
+import inspect
 from importlib.metadata import version
 from pathlib import Path
 
@@ -16,10 +18,13 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter, ObjectDeletionFlag
 from pypdf.errors import LimitReachedError, PyPdfError
 
 from contracts import TextOverflowError, fit_text, validate_manifest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from pdf_text_visibility import native_char_count
 
 
 REGULAR_FONT_PATHS = [Path(r"C:\Windows\Fonts\arial.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
@@ -509,6 +514,98 @@ def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
     return cleaned, clean_report, layout_report, False
 
 
+def _source_identity(manifest: dict) -> dict:
+    source = Path(manifest.get("source", ""))
+    if not source.is_file():
+        return {"available": False}
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if manifest.get("source_sha256") and digest != manifest["source_sha256"].lower():
+        raise ValueError("source PDF hash mismatch")
+    return {"available": True, "sha256": digest}
+
+
+def _source_backgrounds(manifest: dict):
+    """Reuse encoded scan pages, never source text or incompatible geometry."""
+    if not _source_identity(manifest)["available"]:
+        return None, {}
+    reader = PdfReader(manifest["source"])
+    bases = {}
+    for page in manifest["pages"]:
+        number = page["source_page"]
+        original = reader.pages[number - 1]
+        box = original.cropbox
+        compatible = (not page.get("layout_adjustments") and not original.rotation
+                      and abs(float(box.left)) < .01 and abs(float(box.bottom)) < .01
+                      and abs(float(box.width) - page["width_pt"]) < .01
+                      and abs(float(box.height) - page["height_pt"]) < .01)
+        if compatible and native_char_count(original) == 0:
+            bases[number] = original
+    return reader, bases
+
+
+def _encoded_image_bytes(path: Path) -> int:
+    """Measure encoded image streams, without decompressing large scan pages."""
+    seen = set()
+    total = 0
+
+    def visit(resources):
+        nonlocal total
+        resources = resources.get_object() if resources else {}
+        objects = resources.get('/XObject', {})
+        objects = objects.get_object() if objects else {}
+        for reference in objects.values():
+            obj = reference.get_object()
+            identity = id(obj)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if obj.get('/Subtype') == '/Image':
+                total += len(obj._data)
+                mask = obj.get('/SMask')
+                if mask is not None and id(mask.get_object()) not in seen:
+                    seen.add(id(mask.get_object()))
+                    total += len(mask.get_object()._data)
+            elif obj.get('/Subtype') == '/Form':
+                visit(obj.get('/Resources'))
+    with PdfReader(path) as reader:
+        for page in reader.pages:
+            visit(page.get('/Resources'))
+    return total
+
+
+def output_size_evidence(manifest: dict, output: Path, max_output_bytes=None) -> dict:
+    source = Path(manifest.get('source', ''))
+    size = output.stat().st_size
+    source_size = source.stat().st_size if source.is_file() else None
+    ratio = size / source_size if source_size else None
+    review = bool(ratio and ratio > 3 and size - source_size > 10 * 1024**2)
+    over_limit = max_output_bytes is not None and size > max_output_bytes
+    return {'output_bytes': size, 'source_bytes': source_size,
+            'output_image_stream_bytes': _encoded_image_bytes(output),
+            'growth_ratio': ratio, 'size_review_required': review,
+            'max_output_bytes': max_output_bytes, 'over_delivery_limit': over_limit,
+            'delivery_ready': not (review or over_limit)}
+
+
+def _draw_cleanup_patches(pdf, page, blocks, cleaned):
+    # Inclusive Pillow cleanup bounds need the final row/column too.
+    with Image.open(page["render_path"]) as image:
+        original = image.convert("RGB")
+    for block in blocks:
+        if block.get("action") != "replace":
+            continue
+        for box in block.get("clean_boxes") or [block["clean_box"]]:
+            x0, y0, x1, y1 = _clamp_box(box, cleaned.width, cleaned.height)
+            x1, y1 = min(x1 + 1, cleaned.width), min(y1 + 1, cleaned.height)
+            region = (x0, y0, x1, y1)
+            crop = cleaned.crop(region)
+            if ImageChops.difference(original.crop(region), crop).getbbox() is None:
+                continue
+            sx, sy = page["width_pt"] / cleaned.width, page["height_pt"] / cleaned.height
+            pdf.drawImage(ImageReader(crop), x0 * sx, page["height_pt"] - y1 * sy,
+                          width=(x1-x0)*sx, height=(y1-y0)*sy)
+
+
 def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dict:
     """Original full-document renderer, also used for each uncached page."""
     started = time.perf_counter()
@@ -530,15 +627,32 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
         "source_crop_runs": [], "source_crop_run_count": 0, "mixed_color_block_count": 0,
     }
     temporary_output = output.with_suffix(".building.pdf")
+    source_reader, source_bases = _source_backgrounds(manifest)
     pdf = canvas.Canvas(str(temporary_output), pageCompression=1)
     for page_number in manifest["selected_pages"]:
         page = page_index[page_number]
         page_started = time.perf_counter()
         typography_evidence = resolve_page_typography(blocks_by_page[page_number], page)
         pdf.setPageSize((page["width_pt"], page["height_pt"]))
-        cleaned, clean_report, layout_report, cache_hit = prepare_clean_base(page, blocks_by_page[page_number], clean_dir)
         clean_path = clean_dir / f"page-{page_number:04d}.png"
-        pdf.drawImage(ImageReader(cleaned), 0, 0, width=page["width_pt"], height=page["height_pt"], preserveAspectRatio=False)
+        if page_number in source_bases and not any(
+                block.get('action') == 'replace' for block in blocks_by_page[page_number]):
+            # Photo/no-text/additive pages need no decoded, cleaned full-page PNG.
+            cleaned = None
+            clean_path = Path(page['render_path'])
+            clean_report = {'changed_pixel_count': 0, 'outside_approved_pixel_changes': 0}
+            layout_report = {'layout_adjustment_count': 0, 'layout_changed_pixel_count': 0,
+                             'layout_outside_approved_pixel_changes': 0}
+            cache_hit = False
+        else:
+            cleaned, clean_report, layout_report, cache_hit = prepare_clean_base(page, blocks_by_page[page_number], clean_dir)
+        if page_number in source_bases:
+            if cleaned is not None:
+                _draw_cleanup_patches(pdf, page, blocks_by_page[page_number], cleaned)
+            background_encoding = "original_pdf_with_local_patches"
+        else:
+            pdf.drawImage(ImageReader(cleaned), 0, 0, width=page["width_pt"], height=page["height_pt"], preserveAspectRatio=False)
+            background_encoding = "lossless_render_fallback"
         _draw_vector_lines(pdf, page)
         rendered_ids = []
         source_image = None
@@ -563,9 +677,24 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
         report["changed_pixel_count"] += clean_report["changed_pixel_count"]
         report["changed_pixel_count"] += layout_report["layout_changed_pixel_count"]
         elapsed = round(time.perf_counter() - page_started, 3)
-        report["pages"].append({"source_page": page_number, "clean_path": str(clean_path), "rendered_block_ids": rendered_ids, "typography_evidence": typography_evidence, "clean_cache_hit": cache_hit, "elapsed_seconds": elapsed, **layout_report, **clean_report})
+        report["pages"].append({"source_page": page_number, "background_encoding": background_encoding, "clean_path": str(clean_path), "rendered_block_ids": rendered_ids, "typography_evidence": typography_evidence, "clean_cache_hit": cache_hit, "elapsed_seconds": elapsed, **layout_report, **clean_report})
         print(json.dumps({"stage": "build", "page": page_number, "seconds": elapsed, "cache_hit": cache_hit}), flush=True)
     pdf.save()
+    if source_bases:
+        preserved = temporary_output.with_suffix(".preserved.pdf")
+        with PdfReader(temporary_output) as overlay, PdfWriter() as writer:
+            for index, number in enumerate(manifest["selected_pages"]):
+                if number in source_bases:
+                    base = writer.add_page(source_bases[number])
+                    # Remove stale hidden OCR before adding selectable translation.
+                    writer.remove_objects_from_page(base, ObjectDeletionFlag.TEXT)
+                    base.merge_page(overlay.pages[index])
+                else:
+                    writer.add_page(overlay.pages[index])
+            writer.write(preserved)
+        preserved.replace(temporary_output)
+    if source_reader is not None:
+        source_reader.close()
     temporary_output.replace(output)
     report["elapsed_seconds"] = round(time.perf_counter() - started, 3)
     report["output"] = str(output)
@@ -592,7 +721,9 @@ def _page_build_identity() -> dict:
         }
     return {
         "implementation": {name: hashlib.sha256((scripts / name).read_bytes()).hexdigest()
-                           for name in ("build_scan.py", "contracts.py", "layout_adjustments.py")},
+                           for name in ("build_scan.py", "contracts.py", "layout_adjustments.py")}
+                          | {"pdf_text_visibility.py": hashlib.sha256(
+                              Path(inspect.getfile(native_char_count)).read_bytes()).hexdigest()},
         "dependencies": {name: version(name) for name in ("reportlab", "Pillow", "numpy", "pypdf")},
         "python": platform.python_version(), "fonts": fonts,
     }
@@ -657,11 +788,13 @@ def _seed_page_caches(pdf_path: Path, report: dict, entries: list) -> list[dict]
     return reports
 
 
-def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool = True) -> dict:
+def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool = True,
+              max_output_bytes: int | None = None) -> dict:
     started = time.perf_counter()
     manifest = copy.deepcopy(manifest)
     register_fonts(manifest.get("target_language", ""))
     validate_manifest(manifest)
+    source_identity = _source_identity(manifest)
     output = Path(output_path).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     clean_dir = output.parent / "clean-bases"
@@ -684,7 +817,7 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
             page_manifest = {**manifest, "selected_pages": [page_number], "pages": [page],
                 "blocks": [block for block in manifest["blocks"] if block["page"] == page_number],
                 "source_lines": [line for line in manifest["source_lines"] if line["page"] == page_number]}
-            key = _json_hash({"source_render": source_hash, "page": page,
+            key = _json_hash({"source_pdf": source_identity, "source_render": source_hash, "page": page,
                 "blocks": page_manifest["blocks"], "source_lines": page_manifest["source_lines"],
                 "target_language": manifest.get("target_language", ""), "runtime": identity})
             page_pdf = cache_dir / f"page-{page_number:04d}.pdf"
@@ -750,6 +883,12 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
                   rendered_block_count=len(report["rendered_blocks"]),
                   source_crop_run_count=len(report["source_crop_runs"]),
                   elapsed_seconds=round(time.perf_counter() - started, 3))
+    report['size_evidence'] = output_size_evidence(manifest, temporary_output, max_output_bytes)
+    report['delivery_ready'] = report['size_evidence']['delivery_ready']
+    report['builder_implementation_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    report['background_encoding_counts'] = {
+        mode: sum(row.get('background_encoding') == mode for row in report['pages'])
+        for mode in sorted({row.get('background_encoding', 'unknown') for row in report['pages']})}
     temporary_report = output.with_suffix(".build-report.tmp.json")
     temporary_report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary_report.replace(output.with_suffix(".build-report.json"))
@@ -763,10 +902,18 @@ def main() -> None:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--no-page-cache", action="store_true", help="Force original full-document rendering")
+    parser.add_argument("--max-output-mib", type=float,
+                        help="Actual receiving channel limit; exceeding it blocks delivery, not artifact saving")
     args = parser.parse_args()
+    if args.max_output_mib is not None and args.max_output_mib <= 0:
+        parser.error('--max-output-mib must be positive')
     report = build_pdf(json.loads(Path(args.manifest).read_text(encoding="utf-8")), args.output,
-                       use_page_cache=not args.no_page_cache)
-    print(json.dumps({"output": report["output"], "rendered_block_count": report["rendered_block_count"], "outside_approved_pixel_changes": report["outside_approved_pixel_changes"]}, ensure_ascii=False))
+                       use_page_cache=not args.no_page_cache,
+                       max_output_bytes=int(args.max_output_mib * 1024**2) if args.max_output_mib else None)
+    print(json.dumps({"output": report["output"], "rendered_block_count": report["rendered_block_count"], "outside_approved_pixel_changes": report["outside_approved_pixel_changes"],
+                      'delivery_ready': report['delivery_ready'], 'size_evidence': report['size_evidence']}, ensure_ascii=False))
+    if not report['delivery_ready']:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

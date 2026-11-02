@@ -7,8 +7,11 @@ description: Translate scan-only PDFs and hidden-OCR scans through OCR or locate
 
 Follow the PDF router's mode. Every page uses `preserve_raster`, including prose,
 contents and regular tables: keep the full source page, clean only source glyph
-regions, then write selectable translations. Additive/bilingual output keeps the
-source text and performs no cleanup. There is no scan-page reconstruction branch.
+regions, then write selectable translations. Preserve the encoded original PDF
+background and overlay local cleanup patches; do not routinely re-embed a full
+RGB raster. The official builder selects a measured lossless fallback only for
+incompatible geometry, raster layout adjustments or painted native text.
+Additive/bilingual output keeps the source text and performs no cleanup. There is no scan-page reconstruction branch.
 Standalone image carriers use these low-level utilities under their own adapter.
 
 Read [delivery policy](../../../references/delivery-policy.md),
@@ -89,6 +92,22 @@ Sample the local background; use a constant fill only after confirming it fits
 that actual region. Preserve rules, leaders, icons, signatures and photos.
 Wrap full paragraphs/cells at a consistent role baseline; first use safe space,
 then shrink only the genuinely overflowing unit. Preserve color and orientation.
+
+## Output size and delivery
+
+Use the official builder rather than a task-specific full-page raster writer.
+Its build report records the executing script hash, original-background/fallback
+page counts, encoded image bytes, output bytes and growth ratio. Check these
+measurements on the first candidate, before spending more time on final assembly.
+A fallback is lossless, but can be large; do not force every page into that path.
+
+When a receiving channel has a known limit, pass `--max-output-mib <actual-limit>`
+to the build command (for example 200 only for a channel with that limit). The
+builder saves an over-limit artifact and its report but exits nonzero with
+`delivery_ready: false`. More than 3x growth with over10 MiB added also requests
+a size review. QA cannot pass a build marked not ready for delivery. Diagnose
+image encoding/fallback counts; never silently raise the limit, discard pages,
+flatten target text or lower scan readability to make a file fit.
 
 ## Review once, repair locally
 
