@@ -45,7 +45,13 @@ def test_export_carries_whole_page_context_and_term_senses_without_changing_sour
     pipeline.export_translation_command(argparse.Namespace(manifest=str(path),output=str(out)))
     packet=json.loads(out.read_text(encoding="utf-8"))
     assert packet["pages"][0]["ordered_source_ids"]==["p1","p2"]
-    assert packet["pages"][0]["page_context"]=="窑头罩\n80 W"
+    assert "page_context" not in packet["pages"][0]
+    by_id={record["id"]:record for record in packet["records"]}
+    assert "\n".join(by_id[i]["source_text"] for i in packet["pages"][0]["ordered_source_ids"])=="窑头罩\n80 W"
+    ordered=packet["pages"][0]["ordered_source_ids"]
+    assert ordered[ordered.index("p1")+1]=="p2"
+    assert ordered[ordered.index("p2")-1]=="p1"
+    assert not any(any(key.startswith("context_before") or key.startswith("context_after") for key in record) for record in packet["records"])
     term=next(t for t in packet["pages"][0]["terminology"] if t["source"]=="窑头罩")
     assert term["translation"]=="Kiln hood" and "语境" in term["context"]
     assert packet["target_language"]=="en"

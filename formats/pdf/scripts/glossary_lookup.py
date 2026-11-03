@@ -100,10 +100,43 @@ def scan_english(text: str, entries: dict[str, dict]) -> list[dict]:
     return matches
 
 
-def page_terms(text: str, entries: dict[str, dict]) -> list[dict]:
-    """Context candidates, not automatic replacements or semantic approval."""
-    found = {m["source"]: {k: v for k, v in m.items() if k not in {"start", "end"}}
-             for m in [*scan_text(text, entries), *scan_english(text, entries)]}
+def page_terms(text: str, entries: dict[str, dict], source_language: str | None = None) -> list[dict]:
+    """Small, conservative page hints; explicit lookup retains the full table.
+
+    Unreviewed single-word English matches do not establish a technical sense:
+    e.g. pump discharge is not electrical discharge. Keep trusted/multiword
+    matches and every contextual alternative, without repeating provenance.
+    """
+    language = str(source_language or '').casefold()
+    matches = []
+    if not language or language.startswith(('zh', 'ja', 'ko')):
+        matches.extend((match, False) for match in scan_text(text, entries))
+    if not language or language.startswith('en'):
+        matches.extend((match, True) for match in scan_english(text, entries))
+    found = {}
+    provenance = 'Word 参考资料原文（2011）；新增词条未经逐条专业校核，使用时结合语境核对。'
+    for match, english in matches:
+        source = match['source']
+        if len(source.strip()) < 2:
+            continue
+        context = match.get('context', '')
+        imported = context.startswith(provenance)
+        context = context.removeprefix(provenance).strip()
+        if imported and not context:
+            # Short generic fragments are available on demand, not strong page
+            # recommendations. Longer Chinese technical phrases still qualify.
+            words = re.findall(r'[A-Za-z]+', match['translation'])
+            if (english or len(source) < 3) and len(words) < 2:
+                continue
+        item = {'source': source, 'translation': match['translation']}
+        if imported:
+            item['unreviewed'] = True
+        if context:
+            item['context'] = context
+        matched = text[match['start']:match['end']]
+        if english and _english_key(matched) != _english_key(match['translation']):
+            item['matched'] = matched
+        found[source] = item
     return list(found.values())
 
 def main(default_glossary: Path = DEFAULT_GLOSSARY) -> None:

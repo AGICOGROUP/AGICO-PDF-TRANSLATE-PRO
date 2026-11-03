@@ -30,6 +30,7 @@ def runtime(tmp_path, monkeypatch):
         return engine
     monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', SimpleNamespace(
         __file__=str(package / '__init__.py'), RapidOCR=create_engine))
+    monkeypatch.setattr(extract_scan, 'create_ocr_engine', create_engine)
     monkeypatch.setattr(extract_scan, 'configure_page_detector', lambda engine: None)
     return package, config, engines
 
@@ -143,6 +144,7 @@ def test_explicit_no_ocr_preserves_render_and_unresolved_visual_inventory(tmp_pa
     monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', None if ocr_unavailable else
                         SimpleNamespace(RapidOCR=forbidden))
     monkeypatch.setattr(extract_scan, 'ocr_runtime_signature', forbidden)
+    monkeypatch.setattr(extract_scan, 'create_ocr_engine', forbidden)
     source = tmp_path / 'fresh-visual-source.pdf'
     image = Image.new('RGB', (800, 300), 'white')
     draw = ImageDraw.Draw(image)

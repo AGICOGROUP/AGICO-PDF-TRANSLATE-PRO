@@ -42,8 +42,8 @@ def _new_engine():
     0 rows with the page configuration), which then mislabels legible lines as non-text. Crops
     therefore get their own engine with stock detection settings.
     """
-    from rapidocr_onnxruntime import RapidOCR
-    return RapidOCR()
+    from extract_scan import create_ocr_engine
+    return create_ocr_engine()
 
 
 def _crop(image: Image.Image, box: list) -> Image.Image:

@@ -185,6 +185,27 @@ def classify_document_kind(
     return "document", []
 
 
+def scan_dominant_report(source: Path, counts: list[int]) -> bool:
+    """A few native covers/headers must not duplicate a whole scanned report pipeline."""
+    if not counts or sum(n > 0 for n in counts) * 10 > len(counts):
+        return False
+    try:
+        import pymupdf
+        with pymupdf.open(source) as document:
+            covered = 0
+            for page in document:
+                # Image bboxes are unrotated page coordinates in PyMuPDF.
+                bounds = page.rect * page.derotation_matrix
+                area = bounds.get_area()
+                if area > 0 and any(
+                        (pymupdf.Rect(image['bbox']) & bounds).get_area() >= .9 * area
+                        for image in page.get_image_info()):
+                    covered += 1
+            return covered * 10 >= len(counts) * 9
+    except (ImportError, OSError, ValueError, RuntimeError):
+        return False  # Keep the established mixed/native path without this probe.
+
+
 def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
     if not source.is_file():
         return 2, report(error="source file not found")
@@ -271,6 +292,22 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
         )
 
     pdf_type = "native-text" if native_text_pages == page_count else "mixed"
+    if document_kind == 'document' and scan_dominant_report(source, counts):
+        if rotated:
+            return 2, report(
+                pdf_type=pdf_type, page_count=page_count,
+                native_text_pages=native_text_pages, native_char_counts=counts,
+                rotated_pages=rotated, document_kind=document_kind,
+                translation_mode='add_bilingual' if mode == 'bilingual' else 'replace',
+                next_action='translate',
+                drawing_evidence=drawing_evidence + ['scan_dominant_report'],
+                error='normalize rotated scan pages before translation routing')
+        return 0, report(
+            pdf_type=pdf_type, adapter=SCAN_ADAPTER, page_count=page_count,
+            native_text_pages=native_text_pages, native_char_counts=counts,
+            rotated_pages=rotated, document_kind=document_kind,
+            translation_mode='add_bilingual' if mode == 'bilingual' else 'replace',
+            next_action='translate', drawing_evidence=drawing_evidence + ['scan_dominant_report'])
     if mode == "bilingual" or (drawing and mode == "auto"):
         adapter = BILINGUAL_ADAPTER
         translation_mode = "add_bilingual"

@@ -18,6 +18,24 @@ from build_scan import apply_page_typography_policy, build_pdf, register_fonts, 
 
 
 class PageTypographyPolicyTests(unittest.TestCase):
+    def test_group_median_respects_each_explicit_minimum(self):
+        blocks = [
+            {'id':'note', 'role':'footer', 'max_font':7, 'min_font':7},
+            {'id':'number', 'role':'footer', 'max_font':8, 'min_font':8},
+            {'id':'label1', 'role':'caption', 'max_font':6.5, 'min_font':6.5},
+            {'id':'label2', 'role':'caption', 'max_font':6.5, 'min_font':6.5},
+            {'id':'figure', 'role':'caption', 'max_font':7, 'min_font':7},
+        ]
+        evidence = apply_page_typography_policy(blocks)
+        self.assertEqual([b['max_font'] for b in blocks], [7.5,8,6.5,6.5,7])
+        self.assertEqual(evidence['footer']['minimum_font_constraints'][0]['block_id'], 'number')
+        self.assertEqual(evidence['annotation']['minimum_font_constraints'][0]['minimum_font_size'], 7)
+        register_fonts('ru')
+        for index, block in enumerate(blocks):
+            block.update(action='replace', translation='Текст', box=[10,index*60+10,390,index*60+60])
+        resolve_page_typography(blocks, {'width_pt':200,'height_pt':200,'pixel_width':400,'pixel_height':400})
+        self.assertTrue(all(b['max_font'] >= b['min_font'] for b in blocks))
+
     def test_korean_target_uses_hangul_capable_font(self) -> None:
         register_fonts("ko-KR")
         filename = str(pdfmetrics.getFont(build_scan.REGULAR_FONT).face.filename).lower()

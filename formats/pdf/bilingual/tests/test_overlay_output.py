@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,23 @@ import pymupdf
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "bilingual_overlay.py"
 FONT = Path(r"C:\Windows\Fonts\simhei.ttf")
+
+
+class BilingualWrappingTests(unittest.TestCase):
+    def test_latin_words_remain_whole_when_the_next_word_can_fit(self):
+        spec = importlib.util.spec_from_file_location("bilingual_wrapping", SCRIPT)
+        overlay = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(overlay)
+        overlay.text_width = lambda text, *_: len(text)
+        lines = overlay.wrap_cjk("auxiliary drive motor power", "unused", 10, 20)
+        self.assertEqual(["auxiliary drive", "motor power"], lines)
+
+    def test_cjk_still_wraps_without_spaces(self):
+        spec = importlib.util.spec_from_file_location("bilingual_cjk_wrapping", SCRIPT)
+        overlay = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(overlay)
+        overlay.text_width = lambda text, *_: len(text)
+        self.assertEqual(["完整中文", "逐字换行"], overlay.wrap_cjk("完整中文逐字换行", "unused", 10, 4))
 
 
 @unittest.skipUnless(FONT.is_file(), "SimHei is required for the CJK overlay test")

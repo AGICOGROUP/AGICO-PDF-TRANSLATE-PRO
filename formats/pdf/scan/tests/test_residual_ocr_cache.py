@@ -7,6 +7,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import verify_scan
+import extract_scan
 
 
 def test_residual_ocr_reuses_only_unchanged_pages_and_runtime(tmp_path, monkeypatch):
@@ -30,6 +31,7 @@ def test_residual_ocr_reuses_only_unchanged_pages_and_runtime(tmp_path, monkeypa
     monkeypatch.setattr(verify_scan, '_ocr_pass', recognize)
     monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', SimpleNamespace(
         RapidOCR=lambda: engines.append(object()) or engines[-1]))
+    monkeypatch.setattr(extract_scan, 'create_ocr_engine', lambda: engines.append(object()) or engines[-1])
     directory = tmp_path/'qa'
     first = verify_scan.residual_cjk_ocr(pdf, directory, [4, 9])
     assert len(calls) == 4

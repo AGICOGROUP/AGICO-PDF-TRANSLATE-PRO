@@ -1013,9 +1013,9 @@ def export_translation_command(args: argparse.Namespace) -> None:
     for page in manifest["pages"]:
         blocks = page.get("blocks", [])
         context = "\n".join(block["source_text"] for block in blocks)
-        pages.append({"page": page["page"], "page_context": context,
+        pages.append({"page": page["page"],
                       "ordered_source_ids": [b["id"] for b in blocks],
-                      "terminology": page_terms(context, terms)})
+                      "terminology": page_terms(context, terms, manifest.get("source_language"))})
         for index, block in enumerate(blocks):
             records.append(
                 {
@@ -1024,8 +1024,6 @@ def export_translation_command(args: argparse.Namespace) -> None:
                     "source_text": block["source_text"],
                     "translation": block.get("translation", ""),
                     "role": block.get("role", ""),
-                    "context_before": blocks[index - 1]["source_text"] if index else "",
-                    "context_after": blocks[index + 1]["source_text"] if index + 1 < len(blocks) else "",
                     "protected_tokens": block.get("protected_tokens", []),
                 }
             )

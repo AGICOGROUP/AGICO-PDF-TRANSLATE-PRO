@@ -11,8 +11,18 @@ regions, then write selectable translations. Preserve the encoded original PDF
 background and overlay local cleanup patches; do not routinely re-embed a full
 RGB raster. The official builder selects a measured lossless fallback only for
 incompatible geometry, raster layout adjustments or painted native text.
+Unrotated pages whose CropBox equals MediaBox can retain their original
+background even with a nonzero page origin; the builder normalizes its cloned
+coordinates before overlay. Nonzero-origin annotations remain a fallback case.
 Additive/bilingual output keeps the source text and performs no cleanup. There is no scan-page reconstruction branch.
 Standalone image carriers use these low-level utilities under their own adapter.
+Keep source pagination by default. First use verified available space at readable
+role sizes. Only genuine remaining prose/list overflow may use explicit,
+source-bound continuations supported by this builder and verifier; complex table
+flow and internal-destination remapping remain unsupported. Follow the shared
+[pagination policy](../../../references/pdf-pagination.md) and manifest schema,
+including page-number/TOC review. Never add pages to compensate for tight OCR
+boxes or skip source content to satisfy the original page count.
 
 Read [delivery policy](../../../references/delivery-policy.md),
 [page-context review](../../../references/page-context-translation-review.md),
@@ -39,6 +49,10 @@ checkpoints, keyed by source, render, settings, implementation and active OCR
 models/config. Cache hits do not initialize ONNX. Normal extraction is one scale;
 `--dual-scale` spends both recognition attempts and is for observed uncertain
 pages, not a routine whole-document repeat.
+Source OCR, crop retries and residue QA use the same official engine factory:
+at most eight intra-op threads, one inter-op thread and no idle spinning. This
+measured policy is part of checkpoint identity; keep it in the official commands
+rather than relying on task-local runtime patches or silently ignored keywords.
 
 The language guard inspects the configured recognizer, not an assumed filename.
 Unsupported scripts can yield confident Latin lookalikes; stop that recognizer.
@@ -85,13 +99,41 @@ Use the existing audit/resolver interfaces to account for actual ink candidates
 before build; direct source reading can resolve them without another OCR pass.
 The [acceptance reference](references/quality-gates.md) gives disposition bindings.
 For legacy resumed jobs audit all selected pages, not only user screenshots.
-Keep page-plan entries `preserve_raster`; source page order/count remain fixed.
+Keep page-plan entries `preserve_raster`; fixed pagination retains source order
+and count. Explicit continuations require the additional output/source mapping
+and current rendered review; an overflow reason alone does not authorize them.
+Before adding pages, measure the complete original column and actual rendered
+baseline spacing. Do not accumulate extra top/bottom padding for every short
+heading, or impose an arbitrary minimum such as 9 pt. A consistent, genuinely
+readable size in the original safe area takes priority over unnecessary pages;
+confirm the tightest region in an actual render before changing pagination.
 
 Cleanup uses tight source-line/glyph boxes independently of the target layout box.
 Sample the local background; use a constant fill only after confirming it fits
 that actual region. Preserve rules, leaders, icons, signatures and photos.
+For a reviewed black caption crossed by a colored signature, explicit
+`preserve_colored_ink: true` retains the original colored strokes during cleanup.
+Do not use it to leave colored ordinary source prose untranslated. Protect the
+complete signed identity field and annotate beside it if its content cannot be
+safely separated. Preserved numeric/formula/code or justified proper-name ink
+needs no invented OCR transcription: `preserved_ink` records the actual source
+classification, and official QA independently renders and compares those source
+regions. The builder protects their original pixels from cleanup patches;
+translated text must still avoid them. Clear words must be supplemented instead.
+If a previous local repair redraws an original number, check whether a preserved
+source block already owns those same physical glyphs. Merge duplicate ownership
+into the reviewed repair or retain the original once; do not restore original
+ink and draw a second copy over it. Distinct OCR IDs alone do not prove distinct
+physical content.
+A formula or numeric value does not exempt adjacent prose from translation.
+Inspect the whole line; when an equation ends in a readable sentence, preserve
+the equation pixels and translate only the prose using separate cleanup/layout
+boxes. Do not mark the entire mixed line as preserved merely because it starts
+with mathematical symbols.
 Wrap full paragraphs/cells at a consistent role baseline; first use safe space,
 then shrink only the genuinely overflowing unit. Preserve color and orientation.
+Keep embedded names, model identifiers and signed decimal values intact when
+wrapping Chinese text; repair a narrow frame rather than splitting a value.
 
 ## Output size and delivery
 

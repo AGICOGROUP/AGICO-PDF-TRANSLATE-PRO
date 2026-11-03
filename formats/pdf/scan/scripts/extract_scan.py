@@ -9,12 +9,40 @@ import re
 import sys
 import math
 import time
+import importlib
+import threading
+import os
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from pypdf import PdfReader
+
+_OCR_INITIALIZATION_LOCK = threading.Lock()
+
+
+def create_ocr_engine():
+    """Bound ONNX pools during construction, including RapidOCR versions that
+    silently ignore thread-count keyword arguments. Restore the library hook
+    before returning; detection models and thresholds stay unchanged.
+    """
+    package = importlib.import_module('rapidocr_onnxruntime')
+    runtime = importlib.import_module('rapidocr_onnxruntime.utils')
+    with _OCR_INITIALIZATION_LOCK:
+        original = runtime.SessionOptions
+        def options():
+            value = original()
+            value.intra_op_num_threads = min(8, os.cpu_count() or 1)
+            value.inter_op_num_threads = 1
+            value.add_session_config_entry('session.intra_op.allow_spinning', '0')
+            value.add_session_config_entry('session.inter_op.allow_spinning', '0')
+            return value
+        runtime.SessionOptions = options
+        try:
+            return package.RapidOCR()
+        finally:
+            runtime.SessionOptions = original
 
 
 def sha256_file(path: Path) -> str:
@@ -43,7 +71,9 @@ def ocr_runtime_signature() -> dict:
         selected = (root / config[component]['model_path']).resolve()
         models[component] = {'path': str(selected), 'sha256': sha256_file(selected)}
     return {'config_path': str(config_path), 'config_sha256': hashlib.sha256(config_bytes).hexdigest(),
-            'models': models, 'language_guard_sha256': sha256_file(Path(ocr_language_guard.__file__))}
+            'models': models, 'language_guard_sha256': sha256_file(Path(ocr_language_guard.__file__)),
+            'thread_policy': {'intra_op_num_threads': min(8, os.cpu_count() or 1),
+                              'inter_op_num_threads': 1, 'allow_spinning': False}}
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -377,8 +407,7 @@ def extract_selected_pages(
         lines = []
         if run_ocr:
             if engine is None:
-                from rapidocr_onnxruntime import RapidOCR
-                engine = RapidOCR()
+                engine = create_ocr_engine()
                 configure_page_detector(engine)
                 if hasattr(engine, 'text_recognizer'):
                     # An explicit two-scale extraction already spends both attempts.

@@ -14,23 +14,43 @@ Read the root [delivery policy](../../../references/delivery-policy.md) and
 
 Commands below run from this adapter. Keep the original immutable.
 [Runner workflow](references/direct-v6-workflow.md) describes stage evidence.
+Read/write scratch JSON and TSV explicitly as UTF-8 (for example
+`encoding='utf-8'` or `python -X utf8`); do not rely on Windows GBK defaults.
+Console degree/dash display artifacts alone do not establish damaged PDF glyphs.
 
 ```powershell
 python scripts/run_v6_job.py init <original.pdf> --jobs-root <jobs-root> --source-language en --target-language zh --fresh
-python scripts/run_v6_job.py resume <returned-job>
 python scripts/pdf_translation_pipeline.py export-translation --manifest <job>/manifest.json --output <job>/translation-packet.json
 ```
 
 Use actual language codes; `--fresh` is mandatory for tests. For a same-request
 repair resume its existing job. Use the returned job path, not a guessed hash.
-The compact packet supplies ordered whole-page context and relevant cement
-terminology alongside records; read it once with the source pages. Query
+Use `resume` for an interrupted existing job, not as a routine extra step after
+successful fresh initialization. Organize execution into three model turns:
+source-only preparation/export and source-page inspection; then new translation,
+official construction and candidate rendering; then actual source/target review
+and official verification. Within each turn, run dependent CLI commands in order
+with failure checks. Do not add status polling or a separate model turn between
+successful mechanical commands. Translation must be authored after source
+inspection, and review after candidate rendering; batching cannot skip either.
+Read the full page once by following `pages[].ordered_source_ids` into the
+records: each ID owns its unchanged `source_text` once; neighboring records follow
+directly from that ordered ID list, without duplicate paragraphs or ID fields.
+Page terminology contains conservative phrase/sense candidates, not automatic
+replacements. `unreviewed: true` marks an unverified table entry; retained sense
+context must fit the actual equipment. Generic or weak matches are omitted from
+automatic hints, while explicit lookup retains the full glossary. Query
 [cement-terminology.md](references/cement-terminology.md) through
 `scripts/glossary_lookup.py` for further senses, including `--source-language en`.
 Prefer the table over model phrasing only for the matching engineering meaning.
 
-Fill fluent complete translations by stable ID and unchanged source_text. The
-packet importer accepts subsets, rejects duplicate IDs, changed source/request,
+Keep valid existing translations of unchanged numbers, units and identifiers;
+author only the records that still need translation. Read all records in page
+order and review every source ID, including unchanged records. Do not generate
+a second full target mapping just to repeat already valid values. Do not infer
+that arbitrary Latin text is an identifier: readable source prose must be
+translated. Fill fluent complete translations by stable ID and unchanged
+source_text. The packet importer accepts subsets, rejects duplicate IDs, changed source/request,
 non-text/blank targets and inappropriate CJK residue before writing any changes.
 Chinese/Japanese targets allow their own script without an unrelated override.
 
@@ -38,6 +58,13 @@ Chinese/Japanese targets allow their own script without an unrelated override.
 python scripts/pdf_translation_pipeline.py merge-translation --manifest <job>/manifest.json --packet <job>/translation-packet.json
 python scripts/run_v6_job.py build-native <job>
 ```
+
+When the source/hash-bound image inventory explicitly contains `images: []`,
+continue directly with `python scripts/run_v6_job.py assemble <job>`.
+The runner generates the actual empty image metadata/review and runs the existing
+annotation and cleaning stages with bound artifacts; do not handwrite empty
+image-review JSON. Nonempty inventories still require the image review below.
+Missing, malformed or changed inventories cannot be treated as empty.
 
 ## Fit complete paragraphs and cells
 
@@ -65,7 +92,8 @@ target text separately. A text-band solid fill requires observed text-only space
 not a whole-cell erasure across signatures, rules or symbols. Mixed raster pages
 stay in this job and need complete source-label ownership too.
 
-Follow runner `annotate-images`, `build-images`, `assemble`; review entries must
+For nonempty inventories follow runner `annotate-images`, `build-images`,
+`assemble`; review entries must
 cover every inventory image, including a true no-text finding. For local image
 corrections use `annotate-images ... --revise` instead of restarting extraction.
 Unchanged English prose is not completed Chinese output; omitted material cannot

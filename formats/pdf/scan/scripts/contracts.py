@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import math
+import re
 
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -101,7 +102,7 @@ def _validate_rich_lines(block: dict, page: dict) -> None:
 
 # A candidate is terminal once it has been dispositioned, or once a registered source line covers
 # its ink (the recovered case). Anything else must stop the build.
-TERMINAL_CANDIDATE_DISPOSITIONS = {"recovered", "non_text", "illegible", "preserved"}
+TERMINAL_CANDIDATE_DISPOSITIONS = {"recovered", "non_text", "illegible", "preserved", "preserved_ink"}
 
 
 def _covered_fraction(inner: list, outer: list) -> float:
@@ -184,6 +185,19 @@ def validate_manifest(manifest: dict) -> dict:
             and isinstance(block.get("box"), list)
             and len(block["box"]) == 4
         ]
+        block_boxes.extend(segment['box'] for block in blocks if block.get('page') == page_number
+                           for segment in block.get('segments', []) if isinstance(segment.get('box'), list))
+        source_boxes = list(page.get('protected_boxes', []))
+        for block in blocks:
+            if block.get('page') != page_number:
+                continue
+            if block.get('action') == 'replace':
+                source_boxes.extend(block.get('clean_boxes') or ([block['clean_box']] if block.get('clean_box') else []))
+            else:
+                source_boxes.extend(source_by_id[sid]['box'] for sid in block.get('source_line_ids', [])
+                                    if sid in source_by_id)
+        source_boxes.extend(c['box'] for c in page.get('ocr_review_candidates', [])
+                            if manifest.get('candidate_dispositions', {}).get(c['id'], {}).get('disposition') == 'preserved_ink')
         for adjustment in page.get("layout_adjustments", []):
             try:
                 validate_layout_adjustment(
@@ -191,6 +205,7 @@ def validate_manifest(manifest: dict) -> dict:
                     float(page["pixel_width"]),
                     float(page["pixel_height"]),
                     [*page.get("protected_boxes", []), *block_boxes],
+                    original_protected_boxes=source_boxes,
                 )
             except LayoutAdjustmentError as exc:
                 raise ManifestError(
@@ -225,6 +240,8 @@ def validate_manifest(manifest: dict) -> dict:
             raise ManifestError(f"block {block_id} must have a four-value box")
         if block["action"] not in {"replace", "preserve", "add_bilingual"}:
             raise ManifestError(f"block {block_id} has invalid action {block['action']!r}")
+        if 'preserve_colored_ink' in block and not isinstance(block['preserve_colored_ink'], bool):
+            raise ManifestError(f"block {block_id} preserve_colored_ink must be boolean")
         if block["action"] == "replace":
             has_single = "clean_box" in block
             has_multiple = "clean_boxes" in block
@@ -357,6 +374,12 @@ def validate_manifest(manifest: dict) -> dict:
     if failures:
         raise ManifestError("; ".join(failures))
 
+    from scan_pagination import validate_pagination
+    try:
+        validate_pagination(manifest)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ManifestError(f"invalid pagination: {exc}") from exc
+
     return {
         "source_line_count": len(source_ids),
         "assigned_line_count": len(assignments),
@@ -369,11 +392,19 @@ def _wrap_paragraph(text: str, font_name: str, font_size: float, width: float) -
     if any("\u3400" <= character <= "\u9fff" for character in text):
         lines: list[str] = []
         current = ""
-        for character in text:
-            candidate = current + character
+        # Chinese may wrap between characters; names, decimals, units and model
+        # identifiers embedded in it remain complete tokens, just as in the
+        # non-CJK branch. A narrow frame must be repaired instead of splitting
+        # an engineering value such as +463.00 into two different-looking values.
+        word = r"[^\W_\u3400-\u9fff]"
+        tokens = re.findall(rf"[+\-−±]?{word}+(?:[.,/_'’+\-−–~～]{word}+)*(?:[°%‰℃]+{word}*)?|\s+|.", text)
+        for token in tokens:
+            if not token.isspace() and stringWidth(token, font_name, font_size) > width:
+                raise TextOverflowError(f"unbreakable token exceeds width: {token!r}")
+            candidate = current + token
             if current and stringWidth(candidate, font_name, font_size) > width:
                 lines.append(current.rstrip())
-                current = character.lstrip()
+                current = token.lstrip()
             else:
                 current = candidate
         if current:

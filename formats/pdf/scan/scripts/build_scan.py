@@ -18,8 +18,9 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from pypdf import PdfReader, PdfWriter, ObjectDeletionFlag
+from pypdf import PdfReader, PdfWriter
 from pypdf.errors import LimitReachedError, PyPdfError
+from pypdf.generic import ContentStream, DecodedStreamObject, NameObject, RectangleObject
 
 from contracts import TextOverflowError, fit_text, validate_manifest
 
@@ -83,10 +84,18 @@ def apply_page_typography_policy(blocks: list[dict]) -> dict[str, dict]:
         target_size = _median(sizes)
         bold_votes = sum(bool(member.get("bold", False)) for member in members)
         target_bold = bold_votes >= len(members) / 2 if group != "body" else bold_votes > len(members) / 2
+        minimum_constraints = []
         for member in members:
-            member["max_font"] = target_size
+            minimum = float(member.get("min_font", ROLE_DEFAULTS.get(member.get("role", ""), (9, 6))[1]))
+            member["max_font"] = max(target_size, minimum)
+            if minimum > target_size:
+                minimum_constraints.append({"block_id": member.get("id", ""),
+                                            "minimum_font_size": minimum,
+                                            "base_font_size": target_size})
             member["bold"] = target_bold
         evidence[group] = {"font_name": BOLD_FONT if target_bold else REGULAR_FONT, "font_size": target_size, "bold": target_bold, "block_ids": [member.get("id", "") for member in members]}
+        if minimum_constraints:
+            evidence[group]["minimum_font_constraints"] = minimum_constraints
     return evidence
 
 
@@ -187,12 +196,13 @@ def _restore_crossing_rules(source, cleaned, box, background):
         cleaned.paste(source.crop((x0,y0,x1,y1)),(x0,y0),Image.fromarray(keep))
 
 
-def clean_background(original: Image.Image, blocks: list[dict]) -> tuple[Image.Image, dict]:
+def clean_background(original: Image.Image, blocks: list[dict], protected_boxes=None) -> tuple[Image.Image, dict]:
     source = original.convert("RGB")
     cleaned = source.copy()
     approved = Image.new("1", cleaned.size, 0)
     approved_draw = ImageDraw.Draw(approved)
     draw = ImageDraw.Draw(cleaned)
+    colored_signature_boxes = []
     for block in blocks:
         if block.get("action") != "replace":
             continue
@@ -204,6 +214,22 @@ def clean_background(original: Image.Image, blocks: list[dict]) -> tuple[Image.I
             color = _sample_background(source, box) if background == "sample" else tuple(background)
             draw.rectangle(box, fill=color)
             _restore_crossing_rules(source, cleaned, box, color)
+            if block.get('preserve_colored_ink'):
+                colored_signature_boxes.append(box)
+    # Only explicitly reviewed signature/certificate fields opt in. Colored
+    # ordinary source text must still be removed and translated normally.
+    for box in colored_signature_boxes:
+        x0,y0,x1,y1 = box
+        box = (x0,y0,min(x1+1,source.width),min(y1+1,source.height))
+        crop = source.crop(box)
+        pixels = np.asarray(crop).astype(np.int16)
+        colored = (pixels.max(axis=2) - pixels.min(axis=2)) > 8
+        cleaned.paste(crop, box[:2], Image.fromarray(colored.astype('uint8') * 255))
+    for box in protected_boxes or []:
+        bounds = _clamp_box(box, source.width, source.height)
+        x0,y0,x1,y1 = bounds
+        bounds = (x0,y0,min(x1+1,source.width),min(y1+1,source.height))
+        cleaned.paste(source.crop(bounds), bounds[:2])
     changed = np.any(np.asarray(ImageChops.difference(source, cleaned).convert("RGB")) != 0, axis=2)
     outside = changed & ~np.asarray(approved, dtype=bool)
     return cleaned, {
@@ -236,6 +262,55 @@ def apply_raster_layout_adjustments(original: Image.Image, page: dict) -> tuple[
         "layout_changed_pixel_count": int(np.count_nonzero(changed)),
         "layout_outside_approved_pixel_changes": int(np.count_nonzero(outside)),
     }
+
+
+def apply_prose_frame_reflows(cleaned: Image.Image, page: dict):
+    """Move/extend an explicitly reviewed plain callout, copying its original ink.
+
+    Only clean white interiors and destinations are supported. Header and bottom
+    strips are copied exactly; side borders are tiled, never stretched.
+    """
+    result = cleaned.convert('RGB').copy()
+    reports = []
+    for spec in page.get('prose_frame_reflows', []):
+        if spec.get('kind') != 'prose_callout' or not str(spec.get('reason', '')).strip():
+            raise ValueError('frame reflow requires an explicit prose_callout reason')
+        old = tuple(spec['original_box']); new = tuple(spec['target_box'])
+        if any(not isinstance(v, int) for v in (*old, *new)):
+            raise ValueError('frame reflow boxes require integer source pixels')
+        if any(x < 0 or y < 0 or r > result.width or b > result.height or r <= x or b <= y
+               for x,y,r,b in (old,new)):
+            raise ValueError('frame reflow escapes page')
+        width, height = old[2]-old[0], old[3]-old[1]
+        target_height = new[3]-new[1]
+        header, border = int(spec['header_height']), int(spec['border_width'])
+        if new[2]-new[0] != width or not 1 <= border <= 8 or not border < header < height-border or target_height < height:
+            raise ValueError('frame may only extend vertically at unchanged column width')
+        crop = result.crop(old)
+        interior = np.asarray(crop)[header+border:height-border-2, border+2:width-border-2]
+        if interior.size == 0 or np.any(interior < 245):
+            raise ValueError('frame interior contains uncleared text or graphic ink')
+        # The vacated source frame is allowed; all other destination pixels must
+        # be blank paper, so signatures, tables and preserved figures fail.
+        destination = result.copy()
+        ImageDraw.Draw(destination).rectangle((old[0],old[1],old[2]-1,old[3]-1), fill='white')
+        if np.any(np.asarray(destination.crop(new)) < 245):
+            raise ValueError('frame destination contains existing ink')
+        ImageDraw.Draw(result).rectangle((old[0],old[1],old[2]-1,old[3]-1), fill='white')
+        frame = Image.new('RGB',(width,target_height),'white')
+        frame.paste(crop.crop((0,0,width,header)),(0,0))
+        frame.paste(crop.crop((0,height-border,width,height)),(0,target_height-border))
+        # A single unmodified plain side-border scanline is repeated. No corner,
+        # title, symbol, or engineering graphic is resampled.
+        left=crop.crop((0,header+border,border,header+border+1))
+        right=crop.crop((width-border,header+border,width,header+border+1))
+        for y in range(header,target_height-border):
+            frame.paste(left,(0,y));frame.paste(right,(width-border,y))
+        result.paste(frame,(new[0],new[1]))
+        reports.append({'original_box':list(old),'target_box':list(new),
+                        'source_frame_sha256':hashlib.sha256(crop.tobytes()).hexdigest(),
+                        'header_pixels_preserved':True,'border_pixels_tiled':True})
+    return result, {'prose_frame_reflow_count':len(reports),'prose_frame_reflows':reports}
 
 
 def _page_box(block: dict, page: dict) -> tuple[float, float, float, float]:
@@ -283,7 +358,10 @@ def _draw_block(pdf: canvas.Canvas, block: dict, page: dict) -> dict:
         else: x = local_left + 1
         pdf.drawString(x, first_baseline - index * fitted.leading, line)
     pdf.restoreState()
-    return {"id": block["id"], "font_size": fitted.font_size, "line_count": len(fitted.lines), "complete": True, "box_pt": [left, bottom, right, top]}
+    record = {"id": block["id"], "font_size": fitted.font_size, "line_count": len(fitted.lines), "complete": True, "box_pt": [left, bottom, right, top]}
+    if '_segment_index' in block:
+        record['segment_index'] = block['_segment_index']
+    return record
 
 
 def _fit_rich_lines(block: dict, page: dict, width: float, height: float) -> tuple[float, float, list[dict]]:
@@ -476,10 +554,12 @@ def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
     source_hash = hashlib.sha256(render_path.read_bytes()).hexdigest()
     if page.get("render_sha256") and source_hash != page["render_sha256"].lower():
         raise ValueError(f"source render hash mismatch on page {page['source_page']}")
-    cleanup = [{key: block[key] for key in ("action", "clean_box", "clean_boxes", "background")
+    cleanup = [{key: block[key] for key in ("action", "clean_box", "clean_boxes", "background", "preserve_colored_ink")
                 if key in block} for block in blocks if block.get("action") == "replace"]
     inputs = {"source": source_hash, "cleanup": cleanup,
+              "protected_source_boxes": page.get('_protected_source_boxes', page.get('protected_boxes', [])),
               "layout": page.get("layout_adjustments", []),
+              "prose_frames": page.get("prose_frame_reflows", []),
               "implementation": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     clean_dir.mkdir(parents=True, exist_ok=True)
@@ -502,7 +582,11 @@ def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
         base = source
         layout_report = {"layout_adjustment_count": 0, "layout_changed_pixel_count": 0,
                          "layout_outside_approved_pixel_changes": 0}
-    cleaned, clean_report = clean_background(base, blocks)
+    cleaned, clean_report = clean_background(base, blocks,
+        page.get('_protected_source_boxes', page.get('protected_boxes', [])))
+    if page.get('prose_frame_reflows'):
+        cleaned, frame_report = apply_prose_frame_reflows(cleaned, page)
+        layout_report.update(frame_report)
     temporary = clean_path.with_suffix(".tmp.png")
     cleaned.save(temporary, compress_level=1)
     temporary.replace(clean_path)
@@ -524,6 +608,44 @@ def _source_identity(manifest: dict) -> dict:
     return {"available": True, "sha256": digest}
 
 
+def _remove_source_text_preserving_forms(page, writer):
+    """Keep Form dictionaries/encoding; ContentStream.clone drops their metadata."""
+    text_operators = {b'Tj', b'TJ', b"'", b'"'}
+
+    def without_text(stream):
+        content = ContentStream(stream, writer)
+        if not any(operator in text_operators for _, operator in content.operations):
+            return None  # In particular, do not rewrite a large no-text Form.
+        content.operations = [(args, op) for args, op in content.operations if op not in text_operators]
+        result = DecodedStreamObject()
+        result.update({k: v for k, v in stream.items() if k not in ('/Length', '/Filter', '/DecodeParms')})
+        result.set_data(content.get_data())
+        return result.flate_encode()
+
+    forms = {}
+
+    def clean_forms(resources):
+        resources = resources.get_object() if resources else {}
+        objects = resources.get('/XObject')
+        objects = objects.get_object() if objects else {}
+        for name, reference in list(objects.items()):
+            form = reference.get_object()
+            if form.get('/Subtype') != '/Form':
+                continue
+            key = id(form)
+            if key not in forms:
+                forms[key] = reference
+                clean_forms(form.get('/Resources'))
+                forms[key] = without_text(form) or reference
+            objects[name] = forms[key]
+
+    clean_forms(page.get('/Resources'))
+    content = page.get_contents()
+    replacement = without_text(content) if content is not None else None
+    if replacement is not None:
+        page.replace_contents(replacement)
+
+
 def _source_backgrounds(manifest: dict):
     """Reuse encoded scan pages, never source text or incompatible geometry."""
     if not _source_identity(manifest)["available"]:
@@ -534,8 +656,9 @@ def _source_backgrounds(manifest: dict):
         number = page["source_page"]
         original = reader.pages[number - 1]
         box = original.cropbox
-        compatible = (not page.get("layout_adjustments") and not original.rotation
-                      and abs(float(box.left)) < .01 and abs(float(box.bottom)) < .01
+        compatible = (not page.get("layout_adjustments") and not page.get('prose_frame_reflows') and not original.rotation
+                      and not ((float(box.left) or float(box.bottom)) and original.get('/Annots'))
+                      and box == original.mediabox
                       and abs(float(box.width) - page["width_pt"]) < .01
                       and abs(float(box.height) - page["height_pt"]) < .01)
         if compatible and native_char_count(original) == 0:
@@ -587,6 +710,35 @@ def output_size_evidence(manifest: dict, output: Path, max_output_bytes=None) ->
             'delivery_ready': not (review or over_limit)}
 
 
+def _unprotected_rectangles(region, protected):
+    """Subtract overlapping protection rectangles without even-odd XOR holes."""
+    rectangles = [region]
+    for p in protected:
+        remaining = []
+        for x0, y0, x1, y1 in rectangles:
+            a, b, c, d = max(x0, p[0]), max(y0, p[1]), min(x1, p[2]), min(y1, p[3])
+            if a >= c or b >= d:
+                remaining.append((x0, y0, x1, y1))
+                continue
+            remaining.extend(r for r in [(x0,y0,a,y1),(c,y0,x1,y1),(a,y0,c,b),(a,d,c,y1)]
+                             if r[0] < r[2] and r[1] < r[3])
+        rectangles = remaining
+    return rectangles
+
+
+def _source_preservation_boxes(manifest, page, blocks):
+    boxes = list(page.get('protected_boxes', []))
+    protected_ids = {sid for block in blocks if (block.get('action') == 'preserve'
+                     or (block.get('action') == 'add_bilingual' and block.get('source_preserved')))
+                     for sid in block.get('source_line_ids', [])}
+    boxes.extend(line['box'] for line in manifest.get('source_lines', [])
+                 if line['page'] == page['source_page'] and line['id'] in protected_ids)
+    dispositions = manifest.get('candidate_dispositions', {})
+    boxes.extend(candidate['box'] for candidate in page.get('ocr_review_candidates', [])
+                 if dispositions.get(candidate.get('id'), {}).get('disposition') == 'preserved_ink')
+    return boxes
+
+
 def _draw_cleanup_patches(pdf, page, blocks, cleaned):
     # Inclusive Pillow cleanup bounds need the final row/column too.
     with Image.open(page["render_path"]) as image:
@@ -602,8 +754,20 @@ def _draw_cleanup_patches(pdf, page, blocks, cleaned):
             if ImageChops.difference(original.crop(region), crop).getbbox() is None:
                 continue
             sx, sy = page["width_pt"] / cleaned.width, page["height_pt"] / cleaned.height
+            protected = page.get('_protected_source_boxes', page.get('protected_boxes', []))
+            protected = [(math.floor(p[0])-1,math.floor(p[1])-1,math.ceil(p[2])+1,math.ceil(p[3])+1)
+                         for p in protected]
+            allowed = _unprotected_rectangles(region, protected)
+            if not allowed:
+                continue
+            pdf.saveState()
+            path = pdf.beginPath()
+            for a,b,c,d in allowed:
+                path.rect(a*sx, page['height_pt']-d*sy, (c-a)*sx, (d-b)*sy)
+            pdf.clipPath(path, stroke=0, fill=0)
             pdf.drawImage(ImageReader(crop), x0 * sx, page["height_pt"] - y1 * sy,
                           width=(x1-x0)*sx, height=(y1-y0)*sy)
+            pdf.restoreState()
 
 
 def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dict:
@@ -618,6 +782,9 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
     manifest_hash = hashlib.sha256(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    for page in manifest['pages']:
+        page['_protected_source_boxes'] = _source_preservation_boxes(
+            manifest, page, blocks_by_page[page['source_page']])
     report = {
         "builder": OFFICIAL_BUILDER,
         "source_sha256": str(manifest.get("source_sha256", "")),
@@ -632,7 +799,8 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
     for page_number in manifest["selected_pages"]:
         page = page_index[page_number]
         page_started = time.perf_counter()
-        typography_evidence = resolve_page_typography(blocks_by_page[page_number], page)
+        typography_evidence = resolve_page_typography(
+            [block for block in blocks_by_page[page_number] if not block.get('_suppress_draw')], page)
         pdf.setPageSize((page["width_pt"], page["height_pt"]))
         clean_path = clean_dir / f"page-{page_number:04d}.png"
         if page_number in source_bases and not any(
@@ -657,6 +825,8 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
         rendered_ids = []
         source_image = None
         for block in blocks_by_page[page_number]:
+            if block.get('_suppress_draw'):
+                continue
             if block["action"] in {"replace", "add_bilingual"}:
                 if block.get("rich_lines"):
                     if source_image is None:
@@ -686,12 +856,30 @@ def _render_pdf(manifest: dict, output_path: str | Path, clean_dir: Path) -> dic
             for index, number in enumerate(manifest["selected_pages"]):
                 if number in source_bases:
                     base = writer.add_page(source_bases[number])
+                    left, bottom = float(base.cropbox.left), float(base.cropbox.bottom)
+                    if left or bottom:
+                        # Transform only the writer-owned page; image streams and
+                        # the original PDF stay untouched. Overlay coordinates are
+                        # already relative to the rendered page's zero origin.
+                        base.add_transformation((1, 0, 0, 1, -left, -bottom))
+                        for name in ('/MediaBox', '/CropBox', '/TrimBox', '/BleedBox', '/ArtBox'):
+                            if name in base:
+                                x0, y0, x1, y1 = map(float, base[name])
+                                base[NameObject(name)] = RectangleObject(
+                                    [x0 - left, y0 - bottom, x1 - left, y1 - bottom])
                     # Remove stale hidden OCR before adding selectable translation.
-                    writer.remove_objects_from_page(base, ObjectDeletionFlag.TEXT)
+                    _remove_source_text_preserving_forms(base, writer)
                     base.merge_page(overlay.pages[index])
+                    base.compress_content_streams()
                 else:
                     writer.add_page(overlay.pages[index])
-            writer.write(preserved)
+            # Compression can leave the replaced decoded streams unreferenced
+            # in the first writer. Clone only the final reachable page graph;
+            # avoid hashing/decompressing image streams just to remove orphans.
+            with PdfWriter() as compacted:
+                for page in writer.pages:
+                    compacted.add_page(page)
+                compacted.write(preserved)
         preserved.replace(temporary_output)
     if source_reader is not None:
         source_reader.close()
@@ -799,7 +987,32 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
     output.parent.mkdir(parents=True, exist_ok=True)
     clean_dir = output.parent / "clean-bases"
     temporary_output = output.with_suffix(".building.pdf")
-    if not use_page_cache:
+    if manifest.get('pagination'):
+        from scan_pagination import primary_manifest, assemble_continuations, require_supported_destinations
+        require_supported_destinations(manifest)
+        page_index = {row['source_page']: row for row in manifest['pages']}
+        overflow_evidence = []
+        for block in manifest['blocks']:
+            if not block.get('segments') or block['role'] not in ('body', 'list_item', 'warning_body'):
+                continue
+            try:
+                resolve_page_typography([copy.deepcopy(block)], page_index[block['page']])
+            except TextOverflowError as exc:
+                overflow_evidence.append({'block_id': block['id'], 'reason': str(exc),
+                    'min_font': block.get('min_font'), 'original_target_box': block['box']})
+        if not overflow_evidence:
+            raise ValueError('pagination requires measured overflow at the requested readable font floor')
+        primary_path = output.with_suffix('.primary.building.pdf')
+        report = _render_pdf(primary_manifest(manifest), primary_path, clean_dir)
+        pagination_report = assemble_continuations(manifest, primary_path, temporary_output, _draw_block,
+            {row['source_page']: row['clean_path'] for row in report['pages']}, REGULAR_FONT)
+        report['rendered_blocks'].extend(pagination_report.pop('continuation_rendered_blocks'))
+        report.update(pagination_report, page_cache_hits=[], dirty_pages=list(manifest['selected_pages']))
+        report['pagination_overflow_evidence'] = overflow_evidence
+        report['pagination_implementation_sha256'] = hashlib.sha256(
+            (Path(__file__).parent/'scan_pagination.py').read_bytes()).hexdigest()
+        primary_path.unlink(missing_ok=True)
+    elif not use_page_cache:
         # Keep the original full-document drawing path available for comparisons.
         report = _render_pdf(manifest, temporary_output, clean_dir)
         report.update(page_cache_hits=[], dirty_pages=list(manifest["selected_pages"]))
@@ -819,6 +1032,7 @@ def build_pdf(manifest: dict, output_path: str | Path, *, use_page_cache: bool =
                 "source_lines": [line for line in manifest["source_lines"] if line["page"] == page_number]}
             key = _json_hash({"source_pdf": source_identity, "source_render": source_hash, "page": page,
                 "blocks": page_manifest["blocks"], "source_lines": page_manifest["source_lines"],
+                "protected_source_boxes": _source_preservation_boxes(page_manifest, page, page_manifest["blocks"]),
                 "target_language": manifest.get("target_language", ""), "runtime": identity})
             page_pdf = cache_dir / f"page-{page_number:04d}.pdf"
             entries.append((page_number, page_manifest, key, page_pdf, _read_page_cache(page_pdf, key)))

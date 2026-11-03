@@ -248,6 +248,19 @@ class SourceTypographyTests(unittest.TestCase):
 
 
 class PageLayoutWrapperTests(unittest.TestCase):
+    def test_wide_cell_question_and_answer_share_one_render_flow(self):
+        page = {"page": 1, "width": 600, "height": 800,
+                "table_cells": [{"bbox": [45, 250, 550, 276]}],
+                "blocks": [
+                    block("p0001-b0001", "Branches?", "是否有分支机构？", [49, 254, 205, 263], size=9),
+                    block("p0001-b0002", "Yes, four branches", "有，四家分支机构", [49, 265, 305, 274], size=9)]}
+        flows, consumed = rebuild.build_table_cell_render_plan(page, pipeline)
+        self.assertEqual({"p0001-b0001", "p0001-b0002"}, consumed)
+        self.assertEqual(1, len(flows))
+        self.assertIn("是否有分支机构？", flows[0]["text"])
+        self.assertIn("有，四家分支机构", flows[0]["text"])
+        self.assertTrue(flows[0]["style"]["cell_bound"])
+
     def test_bound_cells_preserve_unambiguous_source_alignment(self):
         for source_box, expected in (([140, 22, 160, 32], "center"),
                                      ([103, 22, 196, 32], "left"),

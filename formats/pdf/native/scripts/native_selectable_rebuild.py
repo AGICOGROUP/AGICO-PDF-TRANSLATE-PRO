@@ -885,7 +885,6 @@ def build_table_cell_render_plan(
             else:
                 physical_cell = _smallest_containing_cell(page_info, line_box)
                 if (physical_cell is not None
-                        and physical_cell[2] - physical_cell[0] < 0.6 * page_info["width"]
                         and line_box[0] >= physical_cell[0] - 2
                         and line_box[2] <= physical_cell[2] + 2):
                     items = [{"text": target_line, "left": line_box[0],
@@ -941,6 +940,9 @@ def build_table_cell_render_plan(
                         ],
                     )
                 )
+                fragment_style = copy.deepcopy(block["style"])
+                if cell is not None and synthetic_cell is None:
+                    fragment_style["cell_bound"] = True
                 line_fragments.append(
                     {
                         "block_id": block["id"],
@@ -948,7 +950,7 @@ def build_table_cell_render_plan(
                         "box": cell_box,
                         "source_top": line_box[1],
                         "source_left": float(item["left"]),
-                        "style": copy.deepcopy(block["style"]),
+                        "style": fragment_style,
                         "role": block.get("role"),
                         "alignment": infer_cell_alignment(
                             [line], [cell_box[0] - 2, cell_box[1], cell_box[2] + 2, cell_box[3]],

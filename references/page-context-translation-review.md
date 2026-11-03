@@ -37,6 +37,8 @@ in this context, retaining their original IDs and layout containers.
 
 OCR boxes and native text objects are placement units, not independent semantic
 units. Reconstruct sentences split across lines or boxes before translating.
+Recover a split label as one phrase: “Approved” plus a later recovered “By”
+becomes one complete “批准人”, not an additional isolated “人”.
 Interpret a short term using its sentence, section, table heading, unit, or
 diagram relationship. Supply the ordered page text and document glossary with
 each translation batch; if the page must be split, carry the page context into
@@ -72,11 +74,19 @@ For each page check:
 - Meaning: subjects, actions, technical concepts, negation, conditions,
   exceptions, obligations, and causal relationships are preserved.
 - Context: sentences split between boxes read coherently; pronouns, headings,
-  table cells, captions, and diagram labels have the correct referents.
+  table cells, captions, and diagram labels have the correct referents. Keep a
+  terminal's function attached to that terminal, not its neighboring common line;
+  verify the actual saved switches, wires and arrows as well as the label text.
 - Completeness: no omitted, duplicated, fabricated, or untranslated readable
   content; preserved identifiers have a reason. Include headers and footers.
+  Retain legend markers such as ☆/★/● and their exact meanings; they are data
+  linking the legend to table entries, not optional list decoration.
 - Terminology and values: consistent glossary meanings, exact quantities,
-  tolerances, signs, units, formulas, model codes, and standard references.
+  tolerances, signs, units, formulas, model codes, and standard references. When
+  replacing a numerical threshold phrase with a sign, retain inclusive/exclusive
+  bounds: Chinese “30%以下” and “50m以上” mean ≤30% and ≥50m in such conditions;
+  do not silently change them to < or >. If the source is genuinely ambiguous,
+  retain its wording and record the ambiguity rather than inventing a boundary.
 - Final output: the rendered wording matches the reviewed translation; reflow
   or shortening has not changed meaning or separated a value from its label.
 

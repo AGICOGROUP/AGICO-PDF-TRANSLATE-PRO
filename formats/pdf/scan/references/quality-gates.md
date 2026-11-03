@@ -22,6 +22,12 @@ Render every page for initial coverage and inspect edited regions and anomalies.
 After repairs, render/review affected pages only; retain unchanged-page evidence
 by content identity. Cosmetic differences are not failures unless they damage
 meaning, readability or key structure.
+Inspect the saved PDF as well as the cleanup PNG. Reusing an original page must
+retain Form geometry, resources, transparency and intentional opaque coverings.
+If the saved output reveals wording absent from the rendered original, diagnose
+composition before treating it as missed source text; do not translate or expose
+content that the original visibly covered. A clean-base pixel report alone does
+not validate the later PDF merge.
 
 Source-relative minimum font sizes are warnings. Actual unreadability,
 missing glyphs, meaningful overlap/clipping and structural damage still block
@@ -70,6 +76,17 @@ repeat the same ID. Do not resolve a missing row with an unrelated translated
 heading elsewhere.
 `illegible` lists the two actual `attempts`. A reviewed-ID
 checkbox alone, or a supplement with no translation ownership, cannot pass.
+For actually inspected numeric/formula/code/symbol or justified proper-name ink
+that stays in the original image, `preserved_ink` is the alternative to literal
+OCR transcription. Supply `source_id`, `disposition: preserved_ink`,
+`content_kind: numeric|formula|code|symbol|proper_name` and a specific source-based
+`reason` in semantic corrections, and mark the manifest candidate disposition
+`preserved_ink` as well. Ordinary prose is ineligible. The CLI independently renders current source/output with identical
+settings and requires exact pixels inside each candidate box; a claimed pass flag
+in the review cannot substitute for this check. Explicit pagination also requires
+the output-page mapping and an unambiguous `output_page` when necessary. The
+classification remains a semantic judgment; pixel identity cannot prove that a
+readable source word was correctly classified as a number or name.
 
 Use visual-review.json bound to candidate_sha256 with all_pages_rendered,
 reviewed_changed_regions, reviewed_anomaly_pages, text_overlap_failures,
@@ -101,6 +118,13 @@ text_overlap_failures remain blocking. Old reviewed OCR false positives absent
 from the current result are warnings, not new translation defects.
 Render initial page coverage, then only affected pages after corrections;
 reuse unchanged-page evidence with content identity.
+
+For saved-PDF text inspection, verify_scan.py can use installed PyMuPDF to read
+actual characters, positions and directions. Missing expected target text,
+unknown glyphs, unsupported directions or suspected overlaps fall back to the
+legacy parser; unavailable PyMuPDF also falls back without installing dependencies
+during a job. OCR, font, source-ink, semantic and actual-page visual gates remain
+required. Parser speed measurements are not whole-translation timings.
 
 verify_scan.py also reads translation-review.json beside the visual review
 (or --translation-review). Review every page against the original, including

@@ -7,9 +7,8 @@ artifact under a source-hash-bound job directory.
 
 ```powershell
 python scripts/run_v6_job.py init <source.pdf> --jobs-root tmp/pdfs --source-language <source-code> --target-language <target-code>
-python scripts/run_v6_job.py status <job>
-python scripts/run_v6_job.py resume <job>
 python scripts/run_v6_job.py build-native <job>
+# Nonempty image inventories only; images=[] goes directly to assemble.
 python scripts/run_v6_job.py annotate-images <job> `
   --metadata <image-vector-metadata.json> --review <image-review.json>
 python scripts/run_v6_job.py build-images <job>
@@ -24,7 +23,32 @@ its job; a different language pair selects another job. `--fresh` starts an
 independent test without reusing old artifacts and leaves old jobs intact.
 Legacy source-only jobs can still be resumed by their explicit path.
 
-`resume` reports the next internal action. Exit code 2 means Codex must perform
+After `build-native`, a source/hash-bound inventory with an explicit empty
+`images` list needs only `assemble`. It calls the existing `annotate_images` and
+`build_images` stages with system-generated empty metadata and complete review,
+then assembles normally. The image metadata/review/cleanup artifacts and stage
+hash checks remain recorded; final source-to-target semantic and visual reviews
+are still required. `resume` returns `assemble` for this case. Do not handwrite an
+empty review or infer emptiness from a missing, invalid or changed inventory.
+Any nonempty inventory, including logos without translatable text, still needs
+the normal complete image review before assembly.
+
+`export-translation` writes one unchanged `source_text` per record. A page's
+`ordered_source_ids` reconstructs its complete source in order and determines
+the neighboring records without extra per-record references. Read those records
+with the original page before translating. The packet does not repeat full page
+text or neighboring paragraphs. Compact terminology retains matching technical
+phrases and available sense context; `unreviewed: true` is a caution, not approval.
+Use explicit glossary lookup for omitted short/ambiguous words. Legacy packets
+with textual page/neighbor context still import through the same source, request,
+ID and translation validation; the export change does not waive output QA.
+Retain valid unchanged numeric/unit/identifier translations and submit only the
+pending records through the existing subset importer. This avoids rewriting an
+entire second target list while all source IDs remain owned and reviewed.
+Latin prose is not exempt from translation merely because it is non-CJK.
+
+Use `status` or `resume` when recovering an interrupted job, rather than between
+successful commands in a fresh run. `resume` reports the next internal action. Exit code 2 means Codex must perform
 that action; it is not a request for a user-supplied intermediate.
 Legacy `verified` jobs lacking current evidence return `revalidate_evidence`,
 not `deliver`. Reclassify the original first; hidden-OCR scans start/resume the

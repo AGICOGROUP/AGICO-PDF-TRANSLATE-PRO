@@ -312,3 +312,24 @@ def test_same_block_id_on_different_pages_keeps_page_local_measurements(tmp_path
         assert result["rendered_blocks"] == full["rendered_blocks"]
         assert result["changed_pixel_count"] == full["changed_pixel_count"]
     assert result["page_cache_hits"] == [1, 2, 3]
+
+
+def test_candidate_preservation_change_invalidates_only_affected_page(tmp_path):
+    manifest = page_fixture(tmp_path)
+    manifest['pages'][1]['ocr_review_candidates'] = [
+        {'id': 'numeric-band', 'box': [20, 20, 80, 35]}]
+    manifest['candidate_dispositions'] = {'numeric-band': {'disposition': 'non_text'}}
+    output = tmp_path / 'translated.pdf'
+    build_scan.build_pdf(manifest, output)
+    manifest['candidate_dispositions']['numeric-band']['disposition'] = 'preserved_ink'
+    result = build_scan.build_pdf(manifest, output)
+    assert result['dirty_pages'] == [2]
+    assert result['page_cache_hits'] == [1, 3]
+    cold = build_scan.build_pdf(manifest, tmp_path / 'cold.pdf', use_page_cache=False)
+    assert page_evidence(output) == page_evidence(cold['output'])
+    manifest['candidate_dispositions']['numeric-band']['disposition'] = 'non_text'
+    reverted = build_scan.build_pdf(manifest, output)
+    assert reverted['dirty_pages'] == [2]
+    assert reverted['page_cache_hits'] == [1, 3]
+    cold = build_scan.build_pdf(manifest, tmp_path / 'reverted-cold.pdf', use_page_cache=False)
+    assert page_evidence(output) == page_evidence(cold['output'])

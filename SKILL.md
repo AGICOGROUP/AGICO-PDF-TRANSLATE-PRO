@@ -7,6 +7,12 @@ metadata:
 
 # PDF-TRANSLATE-PRO
 
+## 本机私有评测
+
+固定评测目录：`E:/Translation-Evaluation/pdf-translate-pro`。做技能优化、回退分析或版本对比时，先读该目录的 `README.md`，使用其中的登记、版本快照、评分记录及对比工具；普通翻译不强制跑评测。逐步补充经复核的代表样本与关键断言，未评测的项目保持未验证。
+
+评测系统只保存在本机。不得把样本、参考译文、代码快照、运行日志、评分或评测报告复制进技能仓库、提交 Git 或上传分享。路径不可用时如实说明，不伪造结果。单个案例或自动检查通过不构成全面优于稳定版，不自动合并或发布。
+
 Deliver a complete translation from the user's original file. Preserve technical
 values, page relationships and artwork. The model translates and reviews meaning;
 existing adapter scripts extract, place text, build and measure the result.

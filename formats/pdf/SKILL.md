@@ -23,6 +23,7 @@ every page and retains the pypdf malformed/encrypted-file checks.
 |---|---|
 | Ordinary native-text or mixed PDF, replacement | [native](native/SKILL.md) |
 | Scan-only, either output mode | [scan](scan/SKILL.md) |
+| Mixed ordinary report with at most 10% visible-native pages and at least 90% full-page raster coverage, either mode | [scan](scan/SKILL.md) |
 | Native/mixed PDF, retain source and add translation | [bilingual](bilingual/SKILL.md) |
 | Native/mixed engineering drawing, replacement | [native-CAD](native-cad/SKILL.md) |
 
@@ -32,8 +33,14 @@ or explicit `bilingual`. A single-language target uses replacement, including
 engineering sheets. An isolated oversized map/plan in a longer report does not classify the whole
 document as an engineering drawing. The router records that attachment evidence;
 translate its labels in place within the report's selected adapter.
-Raster pages within a genuinely mixed PDF stay in its one
-selected adapter. All scan-only pages preserve their raster bases.
+The scan-dominant report exception keeps the `mixed` content class and records
+`scan_dominant_report` evidence; it avoids two extraction/rebuild paths for a
+scanned report with a few native cover or body pages. It does not apply to
+engineering drawings. In the scan adapter, the few visible-native pages must
+retain their painted source content and receive the same complete text inventory
+and replacement checks as raster pages. Resolve rotation before construction.
+Other mixed PDFs stay in their one selected adapter. All scanned pages preserve
+their raster bases.
 
 When translation expansion cannot fit readably, all PDF adapters follow the
 shared [pagination policy](../../references/pdf-pagination.md). Necessary added
