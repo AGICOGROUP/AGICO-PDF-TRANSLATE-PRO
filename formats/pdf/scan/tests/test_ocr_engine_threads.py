@@ -38,3 +38,23 @@ def test_engine_initialization_limits_threads_and_restores_runtime(monkeypatch, 
     assert seen[0].inter_op_num_threads == 1
     assert seen[0].entries == {'session.intra_op.allow_spinning': '0', 'session.inter_op.allow_spinning': '0'}
     assert runtime.SessionOptions is Options
+
+
+def test_engine_supports_session_options_in_infer_engine(monkeypatch):
+    class Options:
+        def add_session_config_entry(self, key, value):
+            pass
+
+    runtime = SimpleNamespace(SessionOptions=Options)
+    seen = []
+    def create():
+        seen.append(runtime.SessionOptions())
+        return object()
+
+    monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime', SimpleNamespace(RapidOCR=create))
+    monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime.utils', SimpleNamespace())
+    monkeypatch.setitem(sys.modules, 'rapidocr_onnxruntime.utils.infer_engine', runtime)
+    extract_scan.create_ocr_engine()
+    assert seen[0].intra_op_num_threads == min(8, os.cpu_count() or 1)
+    assert seen[0].inter_op_num_threads == 1
+    assert runtime.SessionOptions is Options

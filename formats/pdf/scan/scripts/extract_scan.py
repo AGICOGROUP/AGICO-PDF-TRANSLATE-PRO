@@ -29,6 +29,8 @@ def create_ocr_engine():
     """
     package = importlib.import_module('rapidocr_onnxruntime')
     runtime = importlib.import_module('rapidocr_onnxruntime.utils')
+    if not hasattr(runtime, 'SessionOptions'):
+        runtime = importlib.import_module('rapidocr_onnxruntime.utils.infer_engine')
     with _OCR_INITIALIZATION_LOCK:
         original = runtime.SessionOptions
         def options():
