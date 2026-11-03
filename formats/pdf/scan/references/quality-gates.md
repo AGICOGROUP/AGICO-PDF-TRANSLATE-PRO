@@ -59,10 +59,12 @@ the resolver is the single permitted one.
 The CJK residual check alone cannot detect Spanish remnants in Chinese output;
 source inventory and visual source/target comparison are required for every
 language pair. The heuristic cannot prove complete detection of short labels.
-For each candidate, record exactly one object in the existing `corrections` or
-`source_limitations`: `source_id` is the candidate ID, `reason` gives actual
+For each candidate, record exactly one object in translation-review.json's existing
+`corrections` or `source_limitations`: `source_id` is the candidate ID, `reason` gives actual
 source-based evidence, and `disposition` is `supplemented`, `preserved`, `non_text`, or
-`illegible`. `supplemented` additionally names `source_line_ids` bound to translated
+`illegible`. These are review values; use the manifest mapping in
+[compact decisions](compact-decisions.md) when authoring `candidate_dispositions`.
+`supplemented` additionally names `source_line_ids` bound to translated
 blocks at the candidate's location on that page. `preserved` binds source IDs at
 that location to justified `preserve_confirm` blocks for identifiers/trademarks.
 Every bound ID must belong to a block of the matching action type: mixing a
