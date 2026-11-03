@@ -6,12 +6,13 @@ import json
 import math
 import re
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, NameObject
+from pypdf.generic import ArrayObject, ContentStream, DictionaryObject, FloatObject, NameObject
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -981,6 +982,8 @@ def harmonize_flow_font_sizes(
     scratch: ImageDraw.ImageDraw,
     uniform_body_font_size: float | None = None,
 ) -> None:
+    for flow in flows:
+        flow["style"] = rendered_font_style(flow["style"], flow["text"])
     if uniform_body_font_size is not None:
         target = float(uniform_body_font_size)
         for flow in flows:
@@ -1229,10 +1232,25 @@ def strip_form_text(resources, pdf, visited: set[tuple[int, int]]) -> int:
     return removed
 
 
+class ExactGeometryFloat(FloatObject):
+    """Serialize page-box coordinates without pypdf's display rounding."""
+
+    def myrepr(self) -> str:
+        # PDF numbers cannot use scientific notation. Decimal expands the
+        # shortest round-trip representation while preserving its float value.
+        return format(Decimal(repr(float(self))), "f")
+
+
 def strip_native_text(source: Path) -> tuple[PdfWriter, int]:
     reader = PdfReader(str(source))
     writer = PdfWriter()
     writer.clone_document_from_reader(reader)
+    for original, page in zip(reader.pages, writer.pages):
+        for key in ("/MediaBox", "/CropBox", "/BleedBox", "/TrimBox", "/ArtBox"):
+            if key in original:
+                page[NameObject(key)] = ArrayObject([
+                    ExactGeometryFloat(float(value)) for value in original[key]
+                ])
     removed = 0
     visited: set[tuple[int, int]] = set()
     for page in writer.pages:
@@ -1248,7 +1266,44 @@ def strip_native_text(source: Path) -> tuple[PdfWriter, int]:
     return writer, removed
 
 
+def rendered_font_style(style: dict[str, Any], text: str) -> dict[str, Any]:
+    """Choose coverage from the complete draw string, including merged flows.
+
+    The first source fragment can be Latin even when a continuation is Chinese.
+    Font fitting and PDF drawing must share the same selected face. Neither Arial
+    nor SimSun covers every source symbol (notably checkmarks); use the installed
+    Unicode face only when required, and never silently emit a .notdef glyph.
+    """
+    selected = copy.deepcopy(style)
+    selected.pop("unicode_fallback", None)
+    if CJK_CHAR_RE.search(text):
+        selected["cjk"] = True
+    else:
+        selected.pop("cjk", None)
+    primary = font_key(selected)
+    if primary not in pdfmetrics.getRegisteredFontNames():
+        register_fonts()
+    needed = {ord(char) for char in text if not char.isspace()}
+    cmap = pdfmetrics.getFont(primary).face.charToGlyph
+    missing = {code for code in needed if not cmap.get(code, 0)}
+    if missing:
+        if "ArialUnicodeV5" not in pdfmetrics.getRegisteredFontNames():
+            register_fonts(unicode_fallback=True)
+        if "ArialUnicodeV5" in pdfmetrics.getRegisteredFontNames():
+            fallback = pdfmetrics.getFont("ArialUnicodeV5").face.charToGlyph
+            if all(fallback.get(code, 0) for code in needed):
+                selected["unicode_fallback"] = True
+                return selected
+        raise ValueError(
+            f"No installed render font covers: {', '.join(f'U+{code:04X}' for code in sorted(missing))}"
+        )
+    return selected
+
+
+
 def font_key(style: dict[str, Any]) -> str:
+    if style.get("unicode_fallback"):
+        return "ArialUnicodeV5"
     if style.get("cjk"):
         if style.get("bold"):
             return "SimHeiV5-Bold"
@@ -1262,7 +1317,7 @@ def font_key(style: dict[str, Any]) -> str:
     return "ArialV5"
 
 
-def register_fonts() -> dict[str, str]:
+def register_fonts(*, unicode_fallback: bool = False) -> dict[str, str]:
     fonts = {
         "ArialV5": r"C:\Windows\Fonts\arial.ttf",
         "ArialV5-Bold": r"C:\Windows\Fonts\arialbd.ttf",
@@ -1271,6 +1326,9 @@ def register_fonts() -> dict[str, str]:
         "SimSunV5": r"C:\Windows\Fonts\simsun.ttc",
         "SimHeiV5-Bold": r"C:\Windows\Fonts\simhei.ttf",
     }
+    unicode_path = Path(r"C:\Windows\Fonts\ARIALUNI.ttf")
+    if unicode_fallback and unicode_path.is_file():
+        fonts["ArialUnicodeV5"] = str(unicode_path)
     for name, path in fonts.items():
         if name not in pdfmetrics.getRegisteredFontNames():
             pdfmetrics.registerFont(TTFont(name, path))
@@ -1392,6 +1450,7 @@ def draw_fitted_text(
     minimum_scale: float = 0.82,
     alignment: str = "left",
 ) -> dict[str, Any]:
+    style = rendered_font_style(style, text)
     x0, top, x1, bottom = box
     font_path = pipeline.font_file(style)
     original_size = (
@@ -1568,7 +1627,7 @@ def draw_flow_text(
     color: tuple[int, int, int],
     page_height: float,
 ) -> dict[str, Any]:
-    style = flow["style"]
+    style = rendered_font_style(flow["style"], flow["text"])
     source_size = float(style.get("role_size", style.get("size", 9)))
     fallback = False
     minimum_scale = min(
@@ -1809,7 +1868,7 @@ def make_overlay(
             report.append({"id": block["id"], "page": page_info["page"],
                            "role": block.get("role"), "draws": [contact_draw]})
             continue
-        style = copy.deepcopy(block["style"])
+        style = rendered_font_style(block["style"], translation)
         default_color = tuple(
             int(value) for value in style.get("color_rgb", [0, 0, 0])
         )

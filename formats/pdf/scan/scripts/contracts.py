@@ -158,6 +158,36 @@ def unresolved_scan_candidates(manifest: dict) -> list:
     return pending
 
 
+def validate_source_paths(block: dict, width: int, height: int) -> None:
+    """Validate measured source restoration, never inferred drawing geometry."""
+    if 'protected_source_paths' not in block:
+        return
+    paths = block['protected_source_paths']
+    if block.get('action') != 'replace' or not isinstance(paths, list) or not paths:
+        raise ManifestError('protected_source_paths requires a nonempty replacement path list')
+    def numeric(value):
+        return type(value) in (int, float) and math.isfinite(value)
+    if not all(numeric(v) and v > 0 and int(v) == v for v in (width, height)):
+        raise ManifestError('source paths require positive pixel canvas dimensions')
+    for path in paths:
+        if not isinstance(path, dict):
+            raise ManifestError('source path must be an object')
+        stroke = path.get('width')
+        note = path.get('review_note')
+        points = path.get('points')
+        if not numeric(stroke) or not 0 < stroke <= 3:
+            raise ManifestError('source path width must be finite numeric and <=3 pixels')
+        if not isinstance(note, str) or not note.strip():
+            raise ManifestError('source path requires a source-based review note')
+        if not isinstance(points, list) or not 2 <= len(points) <= 256:
+            raise ManifestError('source path requires 2..256 measured points')
+        for point in points:
+            if (not isinstance(point, (list, tuple)) or len(point) != 2
+                    or not all(numeric(v) for v in point)
+                    or not 0 <= point[0] < width or not 0 <= point[1] < height):
+                raise ManifestError('source path point is outside the immutable source canvas')
+
+
 def validate_manifest(manifest: dict) -> dict:
     source_lines = manifest.get("source_lines", [])
     blocks = manifest.get("blocks", [])
@@ -226,6 +256,11 @@ def validate_manifest(manifest: dict) -> dict:
     preserve_count = 0
     for block in blocks:
         block_id = block.get("id", "<unknown>")
+        if 'protected_source_paths' in block:
+            page = page_index.get(block.get('page'), {})
+            if page.get('layout_adjustments') or page.get('prose_frame_reflows'):
+                raise ManifestError('source paths require an unchanged immutable raster layout')
+            validate_source_paths(block, page.get('pixel_width'), page.get('pixel_height'))
         required = ("page", "source_line_ids", "source", "translation", "role", "box", "status", "action")
         missing = [name for name in required if name not in block]
         if missing:

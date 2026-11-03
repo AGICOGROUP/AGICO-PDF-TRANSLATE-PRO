@@ -677,6 +677,22 @@ def semantic_heading_level(source: str) -> int | None:
 def source_font_is_bold(block: dict[str, Any]) -> bool:
     if "source_bold_override" in block:
         return bool(block["source_bold_override"])
+    weighted_runs = [
+        (run, len(re.sub(r"\s+", "", str(run.get("text", "")))))
+        for run in block.get("runs", [])
+    ]
+    total = sum(weight for _, weight in weighted_runs)
+    if total:
+        bold_weight = sum(
+            weight for run, weight in weighted_runs
+            if bool(run.get("bold")) or any(
+                token in str(run.get("font", "")).casefold()
+                for token in ("bold", "black", "heavy", "simhei", "heiti", "黑体")
+            )
+        )
+        # One emphasized number or label does not define the whole paragraph's
+        # weight. Keep all source runs for local emphasis evidence.
+        return bold_weight / total >= 0.8
     font_names = [str(block.get("style", {}).get("font", ""))]
     font_names.extend(str(run.get("font", "")) for run in block.get("runs", []))
     joined = " ".join(font_names).casefold()
@@ -685,6 +701,14 @@ def source_font_is_bold(block: dict[str, Any]) -> bool:
         token in joined
         for token in ("bold", "black", "heavy", "simhei", "heiti", "黑体")
     )
+
+
+def source_block_is_footer(block: dict[str, Any], page_height: float) -> bool:
+    top, bottom = float(block["bbox"][1]), float(block["bbox"][3])
+    size = float(block.get("style", {}).get("size", 9))
+    # A body paragraph can reach the bottom margin while starting far above it.
+    # Only compact blocks actually starting in the footer zone qualify.
+    return top >= page_height - 55 and bottom - top <= max(30.0, size * 2.5)
 
 
 def classify_document_roles(pages: list[dict[str, Any]]) -> None:
@@ -698,7 +722,7 @@ def classify_document_roles(pages: list[dict[str, Any]]) -> None:
             source = str(block.get("source_text", "")).strip()
             if (
                 top < 60
-                or bottom > page_height - 70
+                or source_block_is_footer(block, page_height)
                 or any(point_in_box(center, cell["bbox"]) for cell in table_cells)
                 or source_font_is_bold(block)
                 or semantic_heading_level(source) is not None
@@ -737,14 +761,15 @@ def classify_document_roles(pages: list[dict[str, Any]]) -> None:
                 role = f"table-{size_bucket:g}"
             elif top < 60:
                 role = "running-header"
-            elif bottom > page_height - 70:
+            elif source_block_is_footer(block, page_height):
                 role = "footer"
             elif semantic_level is not None:
                 role = f"heading-{semantic_level}-{size_bucket:g}"
                 block["source_bold_override"] = True
             elif (
-                source_bold
-                or (size >= document_body_size * 1.25 and len(source) <= 80)
+                len(source) <= 80
+                and not re.match(r"^\s*[•·‣◦●▪\-–—]\s*", source)
+                and (source_bold or size >= document_body_size * 1.25)
             ):
                 level = 1 if size >= document_body_size * 1.5 else 2
                 role = f"heading-{level}-{size_bucket:g}"
@@ -1186,6 +1211,11 @@ def locate_pdftoppm() -> str:
 def font_file(style: dict[str, Any]) -> str:
     candidates: list[str] = []
     windows = os.environ.get("WINDIR", r"C:\Windows")
+    if style.get("unicode_fallback"):
+        unicode_path = os.path.join(windows, "Fonts", "ARIALUNI.ttf")
+        if os.path.isfile(unicode_path):
+            return unicode_path
+        die("The selected Unicode render font is unavailable.")
     if style.get("cjk"):
         if style.get("bold"):
             # SimHei has a complete CJK bold glyph set on Windows. Some

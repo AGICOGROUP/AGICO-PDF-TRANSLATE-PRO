@@ -297,6 +297,17 @@ moved position. Complex tables and engineering diagrams are unsupported. This
 uses the existing measured lossless fallback; ordinary pages keep original
 encoded backgrounds. Prove safe space insufficient before adding continuations.
 
+When cleanup crosses a visible thin source curve, prefer a tight cleanup box or
+the existing source-ink protections. If still necessary, replacement blocks may
+use `protected_source_paths: [{"points": [[x1,y1],[x2,y2]], "width": 1,
+"review_note": "Visible original line measured on the source crop"}]`.
+Coordinates are measured on the immutable source-render pixel canvas; widths
+must be positive and at most 3 pixels. The builder copies original pixels along
+the path inside that block's cleanup, rather than drawing a new line. It rejects
+paths crossing another replacement owner's cleanup or used with moved raster
+layouts/frame reflows. Compare upright source/output crops: preserve the actual
+curve without restoring readable source words or damaging the target text.
+
 Use `vector_lines` only when a cleanup box necessarily removed a known straight segment. Coordinates must come from visible anchors on both sides; never guess hidden geometry.
 
 ## Rich text and exact source-icon reuse

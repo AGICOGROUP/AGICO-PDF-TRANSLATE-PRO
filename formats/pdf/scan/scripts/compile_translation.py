@@ -126,6 +126,8 @@ def compile_translation(extraction: dict, draft: dict, decisions: dict) -> dict:
         if not str(block['translation']).strip():
             raise ValueError('Translation or preservation reason cannot be empty')
         if not preserve:
+            if 'protected_source_paths' in item:
+                block['protected_source_paths'] = copy.deepcopy(item['protected_source_paths'])
             if 'preserve_colored_ink' in item:
                 block['preserve_colored_ink'] = item['preserve_colored_ink']
             if 'clean_boxes' in item:

@@ -22,7 +22,7 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.errors import LimitReachedError, PyPdfError
 from pypdf.generic import ContentStream, DecodedStreamObject, NameObject, RectangleObject
 
-from contracts import TextOverflowError, fit_text, validate_manifest
+from contracts import TextOverflowError, fit_text, validate_manifest, validate_source_paths
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from pdf_text_visibility import native_char_count
@@ -196,6 +196,35 @@ def _restore_crossing_rules(source, cleaned, box, background):
         cleaned.paste(source.crop((x0,y0,x1,y1)),(x0,y0),Image.fromarray(keep))
 
 
+def _restore_source_paths(source: Image.Image, cleaned: Image.Image, blocks: list[dict]) -> None:
+    """Copy exact source pixels along reviewed paths inside their own cleanup.
+
+    This is not a drawing tool. Other owners' cleanup must never be undone.
+    """
+    for block in blocks:
+        if 'protected_source_paths' not in block:
+            continue
+        validate_source_paths(block, *source.size)
+        mask = Image.new('L', source.size, 0)
+        draw = ImageDraw.Draw(mask)
+        for path in block['protected_source_paths']:
+            draw.line([(round(x), round(y)) for x, y in path['points']],
+                      fill=255, width=math.ceil(path['width']))
+        permitted = Image.new('L', source.size, 0)
+        limits = ImageDraw.Draw(permitted)
+        for box in block.get('clean_boxes') or [block['clean_box']]:
+            limits.rectangle(_clamp_box(box, *source.size), fill=255)
+        mask = ImageChops.multiply(mask, permitted)
+        for other in blocks:
+            if other is block or other.get('action') != 'replace':
+                continue
+            for box in other.get('clean_boxes') or [other['clean_box']]:
+                x0,y0,x1,y1 = _clamp_box(box, *source.size)
+                if mask.crop((x0,y0,min(x1+1,source.width),min(y1+1,source.height))).getbbox():
+                    raise ValueError('source path intersects another replacement owner cleanup')
+        cleaned.paste(source, (0,0), mask)
+
+
 def clean_background(original: Image.Image, blocks: list[dict], protected_boxes=None) -> tuple[Image.Image, dict]:
     source = original.convert("RGB")
     cleaned = source.copy()
@@ -225,6 +254,7 @@ def clean_background(original: Image.Image, blocks: list[dict], protected_boxes=
         pixels = np.asarray(crop).astype(np.int16)
         colored = (pixels.max(axis=2) - pixels.min(axis=2)) > 8
         cleaned.paste(crop, box[:2], Image.fromarray(colored.astype('uint8') * 255))
+    _restore_source_paths(source, cleaned, blocks)
     for box in protected_boxes or []:
         bounds = _clamp_box(box, source.width, source.height)
         x0,y0,x1,y1 = bounds
@@ -554,7 +584,11 @@ def prepare_clean_base(page: dict, blocks: list[dict], clean_dir: Path):
     source_hash = hashlib.sha256(render_path.read_bytes()).hexdigest()
     if page.get("render_sha256") and source_hash != page["render_sha256"].lower():
         raise ValueError(f"source render hash mismatch on page {page['source_page']}")
-    cleanup = [{key: block[key] for key in ("action", "clean_box", "clean_boxes", "background", "preserve_colored_ink")
+    if any('protected_source_paths' in block for block in blocks):
+        with Image.open(render_path) as image:
+            if image.size != (page.get('pixel_width'), page.get('pixel_height')):
+                raise ValueError('source path pixel canvas does not match immutable render')
+    cleanup = [{key: block[key] for key in ("action", "clean_box", "clean_boxes", "background", "preserve_colored_ink", "protected_source_paths")
                 if key in block} for block in blocks if block.get("action") == "replace"]
     inputs = {"source": source_hash, "cleanup": cleanup,
               "protected_source_boxes": page.get('_protected_source_boxes', page.get('protected_boxes', [])),
