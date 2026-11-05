@@ -7,6 +7,7 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -128,10 +129,67 @@ def painted_path_counts(
         return {}
 
 
+def has_drawing_border_grid(page, spans) -> bool:
+    """Match repeated zone labels aligned on opposite edges of a drawing."""
+    import pymupdf
+
+    positions = {}
+    for span in spans:
+        label = ''.join(chr(c[0]) for c in span['chars']).strip()
+        if not re.fullmatch(r'[A-F1-9]', label):
+            continue
+        bounds = pymupdf.Rect(span['bbox']) * page.rotation_matrix
+        x = (bounds.x0 + bounds.x1) / (2 * page.rect.width)
+        y = (bounds.y0 + bounds.y1) / (2 * page.rect.height)
+        positions.setdefault(label, []).append((x, y))
+
+    def has_pair(label, axis):
+        return any(abs(first[axis] - second[axis]) < .02
+                   and min(first[1-axis], second[1-axis]) < .16
+                   and max(first[1-axis], second[1-axis]) > .84
+                   for first in positions.get(label, ()) for second in positions.get(label, ()))
+
+    return any(sum(has_pair(label, axis) for label in '123456789') >= 4
+               and sum(has_pair(label, 1-axis) for label in 'ABCDEF') >= 3
+               for axis in (0, 1))
+
+
+def visible_titleblock_pages(document, page_sizes, counts) -> tuple[list[int], list[int]]:
+    """Locate strong drawing labels without trusting filenames or hidden OCR."""
+    if document is None:
+        return [], []
+    found, grids = [], []
+    for index, ((width, height), count) in enumerate(zip(page_sizes, counts), 1):
+        if index > PATH_PROBE_PAGE_LIMIT or not 0 < count <= 3000 or width * height < 250_000:
+            continue
+        try:
+            page = document[index - 1]
+            spans = [span for span in page.get_texttrace() if span['type'] not in (3, 7)]
+            text = '\n'.join(''.join(chr(c[0]) for c in span['chars']) for span in spans).casefold()
+            if count <= 500 and has_drawing_border_grid(page, spans):
+                grids.append(index)
+        except Exception:
+            continue
+        cues = sum(bool(re.search(pattern, text)) for pattern in (
+            r'\bsection\s*[:=a-z-]', r'\bdrg\s*\.?\s*no\b',
+            r'\bsurface\s+finish\b', r'\bnos\s*\.?\s*reqd\b',
+            r'\bчерт[её]ж(?:а)?\b', r'\bмасштаб\b', r'\bлистов\b',
+            r'\bформат\s*[аa][0-5]\b',
+        ))
+        scale_contract = (re.search(r'\bscale\b', text)
+                          and re.search(r'\b1\s*:\s*\d', text)
+                          and re.search(r'\bcontract\s+no\b', text))
+        if cues >= 2 or scale_contract:
+            found.append(index)
+    return found, grids
+
+
 def classify_document_kind(
     page_sizes: list[tuple[float, float]],
     native_char_counts: list[int],
     path_counts: dict[int, int] | None = None,
+    titleblock_pages: list[int] | None = None,
+    border_grid_pages: list[int] | None = None,
 ) -> tuple[str, list[str]]:
     """Return a fail-safe drawing classification from strong sheet evidence."""
     large_landscape_pages = [
@@ -147,6 +205,11 @@ def classify_document_kind(
     # A report can contain an isolated plan/map appendix. Sparse native text is
     # also normal for scans and cannot turn the whole report into a CAD drawing.
     drawing_pages = set(large_landscape_pages)
+    confirmed_titleblocks = [i for i in titleblock_pages or []
+                            if (path_counts or {}).get(i, 0) >= DRAWING_PATH_COUNT]
+    confirmed_grids = [i for i in border_grid_pages or [] if (path_counts or {}).get(i, 0) >= 200]
+    drawing_pages.update(confirmed_titleblocks)
+    drawing_pages.update(confirmed_grids)
     drawing_pages.update(index for index in sparse_landscape_pages(page_sizes, native_char_counts)
                          if (path_counts or {}).get(index, 0) >= DRAWING_PATH_COUNT)
     drawing_pages.update(index for index, (width, height) in enumerate(page_sizes, 1)
@@ -154,6 +217,10 @@ def classify_document_kind(
                          and width * height >= 1_400_000)
     if len(page_sizes) >= 5 and drawing_pages and len(drawing_pages) * 5 < len(page_sizes):
         return "document", ["isolated_drawing_attachments"]
+    if confirmed_grids and low_prose_density:
+        return 'engineering-drawing', ['visible_drawing_border_grid', 'vector_heavy_page']
+    if confirmed_titleblocks and low_prose_density:
+        return 'engineering-drawing', ['visible_drawing_titleblock', 'vector_heavy_page']
     if large_landscape_pages and low_prose_density:
         return "engineering-drawing", [
             "large_landscape_sheet",
@@ -242,9 +309,10 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
                 page_sizes.append((float(page.mediabox.width), float(page.mediabox.height)))
                 if int(page.rotation or 0) % 360:
                     rotated.append(page_number)
+            titleblocks, border_grids = visible_titleblock_pages(document, page_sizes, counts)
             path_counts = painted_path_counts(
-                source, sparse_landscape_pages(page_sizes, counts), document=document
-            )
+                source, list(set(sparse_landscape_pages(page_sizes, counts)) | set(titleblocks) | set(border_grids)),
+                document=document)
     except (OSError, PdfReadError, ValueError, TypeError) as exc:
         return 2, report(error=f"cannot read PDF: {exc}")
 
@@ -256,6 +324,8 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
         page_sizes,
         counts,
         path_counts,
+        titleblocks,
+        border_grids,
     )
     drawing = document_kind == "engineering-drawing"
     if native_text_pages == 0:

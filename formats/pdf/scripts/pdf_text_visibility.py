@@ -4,6 +4,45 @@ from copy import copy
 from pypdf.generic import ContentStream, DictionaryObject, NameObject
 
 
+def _covered_by_final_opaque_image(page, trace_page):
+    """Conservatively identify a scan painted over the complete text layer."""
+    try:
+        log = trace_page.get_bboxlog()
+        images = trace_page.get_image_info(xrefs=True)
+        if not log or log[-1][0] != 'fill-image' or not images:
+            return False
+        image = images[-1]
+        a,b,c,d,_,_ = image['transform']
+        if not ((abs(b)<1e-6 and abs(c)<1e-6) or (abs(a)<1e-6 and abs(d)<1e-6)):
+            return False
+        bounds = trace_page.rect * trace_page.derotation_matrix
+        rect = type(bounds)(image['bbox'])
+        if not rect.contains(bounds):
+            return False
+        resources = page.get('/Resources', {}).get_object()
+        state, stack, final_safe = (1., False, False, '/Normal'), [], False
+        paint = {b'Tj',b'TJ',b"'",b'"',b'S',b's',b'f',b'F',b'f*',b'B',b'B*',b'b',b'b*',b'sh'}
+        for args, op in ContentStream(page.get_contents(), page.pdf, 'bytes').operations:
+            alpha, clipped, masked, blend = state
+            if op == b'q':stack.append(state)
+            elif op == b'Q':state=stack.pop() if stack else (1.,False,False,'/Normal')
+            elif op in (b'W', b'W*'):state=(alpha,True,masked,blend)
+            elif op == b'gs':
+                gs = resources.get('/ExtGState', {}).get_object()[args[0]].get_object()
+                state=(float(gs.get('/ca',alpha)),clipped,
+                       gs.get('/SMask','/None')!='/None' if '/SMask' in gs else masked,
+                       str(gs.get('/BM',blend)))
+            elif op == b'Do':
+                obj = resources.get('/XObject', {}).get_object()[args[0]].get_object()
+                final_safe=(obj.get('/Subtype')=='/Image' and alpha==1. and not clipped
+                    and not masked and blend in ('/Normal','/Compatible')
+                    and not obj.get('/ImageMask') and '/SMask' not in obj and '/Mask' not in obj)
+            elif op in paint:final_safe=False
+        return final_safe
+    except (AttributeError,KeyError,TypeError,ValueError,RuntimeError):
+        return False
+
+
 def _trace_char_count(page):
     """Count painted Unicode glyphs, merging MuPDF's fill/stroke span pairs."""
     count = 0
@@ -82,6 +121,8 @@ def native_char_count(page, *, trace_page=None):
         return form_count + len(''.join((filtered.extract_text() or '').split()))
 
     count = count_stream(page.get_contents(), page.get('/Resources', {}))
+    if count and trace_page is not None and _covered_by_final_opaque_image(page, trace_page):
+        return 0
     if decode_text or count == 0:
         return count
     try:

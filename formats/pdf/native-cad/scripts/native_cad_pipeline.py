@@ -160,6 +160,10 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for page_index, page in enumerate(document):
         span_index = 0
+        traced = {}
+        for item in page.get_texttrace():
+            value = ' '.join(''.join(chr(c[0]) for c in item['chars']).split())
+            traced.setdefault((value, item['font']), []).append(item)
         blocks = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT)["blocks"]
         for block in blocks:
             if block.get("type") != 0:
@@ -173,6 +177,12 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
                         continue
                     span_index += 1
                     protected = is_protected(text)
+                    rect = pymupdf.Rect(span['bbox'])
+                    matching = [item for item in traced.get((text, span.get('font')), [])
+                                if (rect & pymupdf.Rect(item['bbox'])).get_area()
+                                >= .6 * min(rect.get_area(), pymupdf.Rect(item['bbox']).get_area())]
+                    hidden = matching and all(item['type'] == 3 or item.get('opacity',1) <= 0
+                                              for item in matching)
                     records.append(
                         {
                             "id": f"p{page_index + 1:04d}-s{span_index:05d}",
@@ -183,6 +193,8 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
                             "color": int(span.get("color", 0)),
                             "rotation": rotation,
                             "status": "protected" if protected else "pending",
+                            **({'kind':'outline', 'reading_method':'hidden_text_hint_requires_source_review'}
+                               if hidden else {}),
                         }
                     )
     return records
@@ -286,6 +298,7 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto', *,
                 "page": record['page'],
                 "bbox": record['bbox'],
                 "kind": record.get('kind', 'native'),
+                **({'reading_method': record['reading_method']} if record.get('reading_method') else {}),
                 "role": 'body',
                 **({'placement_proposal': placement[record['id']]} if record['id'] in placement else {}),
                 **({'layout_box': placement[record['id']]['layout_box']}
@@ -768,6 +781,8 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
 
     restore_preserved_native_glyphs(document,bound_source,inventory,
                                    {r['id']:r for r in inventory['records']},supplied)
+    # Embed only used glyphs; a complete CJK font otherwise adds ~15 MB per drawing.
+    document.subset_fonts()
     output = job_dir / OUTPUT_NAME
     if fit_failures:
         preview = job_dir / 'translated-native-cad-preview.pdf'

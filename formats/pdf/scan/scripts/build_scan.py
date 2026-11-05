@@ -160,10 +160,12 @@ def _sample_background(image: Image.Image, box: tuple[int, int, int, int]) -> tu
                 candidate = np.median(np.concatenate(wide),axis=0)
                 if min(candidate) > 220:
                     color = tuple(int(v) for v in candidate)
+                else:
+                    color = tuple(int(v) for v in inside)
     return color
 
 
-def _restore_crossing_rules(source, cleaned, box, background):
+def _restore_crossing_rules(source, cleaned, box, background, *, preserve_skewed_rules=False):
     """Keep long straight rules, not whole components joined to source letters."""
     if sum(background)/3 < 200:
         return
@@ -191,6 +193,29 @@ def _restore_crossing_rules(source, cleaned, box, background):
                 else:
                     rules[:,start:end] = 0
         keep |= rules[cy:cy+h,cx:cx+w] * 255
+    # A scanned table can be a few degrees off axis. Only retain detected
+    # sloped rules supported on both sides of the replacement, using source
+    # pixels along the measured line instead of painting a new rule.
+    if preserve_skewed_rules:
+        tilted = np.zeros_like(ink)
+        for axis, length, short in ((0, w, h), (1, h, w)):
+            if length < 45:
+                continue
+            segments = cv2.HoughLinesP(ink, 1, np.pi/720, max(18, length//6),
+                                       minLineLength=max(28, int(length*.75)),
+                                       maxLineGap=max(3, min(14, short//6)))
+            start = (cx,cy)[axis]
+            for segment in [] if segments is None else segments.reshape(-1,4):
+                a, b = segment[:2], segment[2:]
+                if a[axis] > b[axis]:
+                    a, b = b, a
+                along = int(b[axis]-a[axis])
+                cross = abs(int(b[1-axis]-a[1-axis]))
+                if (not along or cross < 2 or cross > along*.06 or
+                        a[axis] > start-2 or b[axis] < start+length+1):
+                    continue
+                cv2.line(tilted, tuple(a), tuple(b), 255, thickness=3)
+        keep |= tilted[cy:cy+h,cx:cx+w]
     if keep.any():
         keep = cv2.dilate(keep,np.ones((3,3),dtype='uint8'))
         cleaned.paste(source.crop((x0,y0,x1,y1)),(x0,y0),Image.fromarray(keep))
@@ -242,7 +267,8 @@ def clean_background(original: Image.Image, blocks: list[dict], protected_boxes=
             background = block.get("background", "sample")
             color = _sample_background(source, box) if background == "sample" else tuple(background)
             draw.rectangle(box, fill=color)
-            _restore_crossing_rules(source, cleaned, box, color)
+            _restore_crossing_rules(source, cleaned, box, color,
+                                    preserve_skewed_rules=block.get("preserve_skewed_rules") is True)
             if block.get('preserve_colored_ink'):
                 colored_signature_boxes.append(box)
     # Only explicitly reviewed signature/certificate fields opt in. Colored
@@ -695,8 +721,17 @@ def _source_backgrounds(manifest: dict):
                       and box == original.mediabox
                       and abs(float(box.width) - page["width_pt"]) < .01
                       and abs(float(box.height) - page["height_pt"]) < .01)
-        if compatible and native_char_count(original) == 0:
-            bases[number] = original
+        if compatible:
+            visible = native_char_count(original)
+            if visible:
+                try:
+                    import pymupdf
+                    with pymupdf.open(manifest['source']) as document:
+                        visible = native_char_count(original, trace_page=document[number-1])
+                except (ImportError, OSError, ValueError, RuntimeError):
+                    pass
+            if visible == 0:
+                bases[number] = original
     return reader, bases
 
 

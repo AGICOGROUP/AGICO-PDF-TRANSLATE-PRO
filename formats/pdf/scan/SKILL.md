@@ -10,7 +10,10 @@ contents and regular tables: keep the full source page, clean only source glyph
 regions, then write selectable translations. Preserve the encoded original PDF
 background and overlay local cleanup patches; do not routinely re-embed a full
 RGB raster. The official builder selects a measured lossless fallback only for
-incompatible geometry, raster layout adjustments or painted native text.
+incompatible geometry, raster layout adjustments or visible painted native text.
+Text completely covered by a final opaque full-page scan is not visible native
+ink: preserve that encoded scan, and locate cleanup against the rendered source,
+not the covered text layer's boxes. Such boxes are reading hints only.
 Unrotated pages whose CropBox equals MediaBox can retain their original
 background even with a nonzero page origin; the builder normalizes its cloned
 coordinates before overlay. Nonzero-origin annotations remain a fallback case.
@@ -55,8 +58,21 @@ measured policy is part of checkpoint identity; keep it in the official commands
 rather than relying on task-local runtime patches or silently ignored keywords.
 
 The language guard inspects the configured recognizer, not an assumed filename.
-Unsupported scripts can yield confident Latin lookalikes; stop that recognizer.
-When the capable model can read the rendered source, use explicit `--no-ocr`
+Unsupported scripts can yield confident Latin lookalikes. For a locally available
+script-specific ONNX recognition model, pass the same absolute path via
+`--rec-model` to the guard and extractor, with `--languages` on both commands.
+Extraction validates the selected model before OCR and binds its hash to the
+page checkpoints. Targeted crop retries use that same bound model. Compare the
+actual source text with the renders, especially handwritten text and dimensions.
+For visibly sideways or inverted scans, set `--recognition-rotation` to the
+counterclockwise angle that makes the page readable. This rotates the OCR input
+and maps boxes and directions back to the unchanged source raster. Use one angle
+only for pages sharing that orientation. For mixed scripts unsupported by a
+single model, read each language area with a capable recognizer or located visual
+transcription. Reconcile the exact source wording, standards, tolerances and
+signed fields before compiling. Never turn a garbled reading into a plausible
+technical value.
+When visual transcription can reliably read the rendered source, use explicit `--no-ocr`
 rendering and located visual supplements in this same pipeline. Keep that reading
 method explicit and source-bound. If reliable reading is unavailable, report the
 capability block instead of inventing text or asking the user for manifests.
@@ -110,7 +126,13 @@ confirm the tightest region in an actual render before changing pagination.
 
 Cleanup uses tight source-line/glyph boxes independently of the target layout box.
 Sample the local background; use a constant fill only after confirming it fits
-that actual region. Preserve rules, leaders, icons, signatures and photos.
+that actual region. In a visually confirmed skewed scan table, use
+`preserve_skewed_rules: true` on the affected replacement regions. The builder
+copies original pixels of long lines supported on both sides of the cleanup
+box. Inspect every restored intersection for surviving letters or missing rule
+segments. Use actual blank paper pixels for a reviewed local fill when a dark
+table rule dominates the sample ring. Preserve rules, leaders, icons, signatures
+and photos.
 For a reviewed black caption crossed by a colored signature, explicit
 `preserve_colored_ink: true` retains the original colored strokes during cleanup.
 Do not use it to leave colored ordinary source prose untranslated. Protect the

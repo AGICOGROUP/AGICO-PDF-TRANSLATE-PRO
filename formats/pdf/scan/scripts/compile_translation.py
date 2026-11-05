@@ -67,6 +67,8 @@ def compile_translation(extraction: dict, draft: dict, decisions: dict) -> dict:
     manifest = {k: copy.deepcopy(extraction[k]) for k in
                 ('source', 'source_sha256', 'selected_pages', 'pages', 'source_lines')}
     manifest['target_language'] = decisions['target_language']
+    if 'recognition_model_override' in extraction:
+        manifest['recognition_model_override'] = copy.deepcopy(extraction['recognition_model_override'])
     recorded_languages = [value for value in (extraction.get('source_language'),
                                                decisions.get('source_language')) if value is not None]
     if any(not isinstance(value, str) or not value.strip() for value in recorded_languages):
@@ -128,6 +130,8 @@ def compile_translation(extraction: dict, draft: dict, decisions: dict) -> dict:
         if not preserve:
             if 'protected_source_paths' in item:
                 block['protected_source_paths'] = copy.deepcopy(item['protected_source_paths'])
+            if item.get('preserve_skewed_rules') is True:
+                block['preserve_skewed_rules'] = True
             if 'preserve_colored_ink' in item:
                 block['preserve_colored_ink'] = item['preserve_colored_ink']
             if 'clean_boxes' in item:

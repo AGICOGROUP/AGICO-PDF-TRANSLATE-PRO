@@ -45,6 +45,21 @@ def region_block() -> dict:
     }
 
 
+def test_skewed_rule_opt_in_keeps_source_pixels_inside_cleaned_box():
+    import numpy as np
+
+    image = Image.new('RGB', (420, 140), 'white')
+    draw = ImageDraw.Draw(image)
+    draw.line((5, 52, 414, 65), fill='black', width=3)
+    draw.rectangle((132, 36, 153, 46), fill='black')
+    block = {'action':'replace', 'clean_box':[80, 28, 335, 80],
+             'background':[255, 255, 255], 'preserve_skewed_rules':True}
+    cleaned, _ = clean_background(image, [block])
+    band = np.asarray(cleaned.convert('L'))[50:66, 85:330]
+    assert np.count_nonzero(band < 100) >= 420
+    assert cleaned.getpixel((140, 40)) == (255, 255, 255)
+
+
 class RegionCleanupTests(unittest.TestCase):
     def test_table_rules_do_not_turn_white_cell_cleanup_black(self) -> None:
         image = Image.new('RGB', (220, 120), 'white')

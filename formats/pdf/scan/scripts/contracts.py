@@ -116,6 +116,22 @@ def _covered_fraction(inner: list, outer: list) -> float:
     return (x1 - x0) * (y1 - y0) / area
 
 
+def _covered_by_boxes(inner, boxes):
+    if any(_covered_fraction(inner, box) >= .8 for box in boxes):
+        return True
+    rects = [(max(inner[0],b[0]), max(inner[1],b[1]), min(inner[2],b[2]), min(inner[3],b[3]))
+             for b in boxes if min(inner[2],b[2]) > max(inner[0],b[0])
+             and min(inner[3],b[3]) > max(inner[1],b[1])]
+    xs = sorted({x for r in rects for x in (r[0],r[2])})
+    area = 0
+    for left,right in zip(xs,xs[1:]):
+        end = inner[1]; height = 0
+        for top,bottom in sorted((r[1],r[3]) for r in rects if r[0] < right and r[2] > left):
+            height += max(0,bottom-max(end,top)); end=max(end,bottom)
+        area += (right-left)*height
+    return area >= .8 * max((inner[2]-inner[0])*(inner[3]-inner[1]),1e-9)
+
+
 def unresolved_scan_candidates(manifest: dict) -> list:
     """Candidate IDs whose ink is neither dispositioned nor covered by a registered line."""
     dispositions = manifest.get("candidate_dispositions") or {}
@@ -144,15 +160,13 @@ def unresolved_scan_candidates(manifest: dict) -> list:
                     # by registered source lines instead.
                     page_lines = [line for line in lines if line.get("page") == number
                                   and isinstance(line.get("box"), list)]
-                    covered = any(_covered_fraction(candidate["box"], line["box"]) >= 0.8
-                                  for line in page_lines)
+                    covered = _covered_by_boxes(candidate['box'], [line['box'] for line in page_lines])
                     if not covered:
                         pending.append(cid if cid else f"page {number} recovered")
                         continue
                 continue
             box = candidate.get("box")
-            if isinstance(box, list) and len(box) == 4 and any(
-                    _covered_fraction(box, other) >= 0.8 for other in page_boxes):
+            if isinstance(box, list) and len(box) == 4 and _covered_by_boxes(box, page_boxes):
                 continue
             pending.append(cid if cid else f"page {number} box {box}")
     return pending

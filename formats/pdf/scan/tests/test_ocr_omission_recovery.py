@@ -52,6 +52,22 @@ def test_explicit_second_scale_does_not_add_another_orientation_retry():
     assert attempts == [1]
 
 
+def test_oriented_read_maps_text_to_original_rectangular_source(monkeypatch):
+    image = Image.new('RGB', (80, 120), 'white')
+    upright_quad = [[10, 20], [40, 20], [40, 30], [10, 30]]
+
+    def read(engine, upright, scale):
+        assert upright.size == (120, 80)
+        return [{'quad': upright_quad, 'text': 'ГОСТ 7798-70', 'ocr_attempts': 1}]
+
+    monkeypatch.setattr(extract_scan, '_ocr_pass', read)
+    record, = extract_scan.read_oriented_page(None, image, 1, 90)
+    assert record['box'] == [50.0, 10.0, 60.0, 40.0]
+    assert record['rotation'] == 90
+    assert record['ocr_attempts'] == 1
+    assert image.size == (80, 120)
+
+
 def test_uncovered_text_candidate_excludes_covered_line_and_rules():
     image = Image.new('RGB', (1000, 600), 'white')
     draw = ImageDraw.Draw(image)

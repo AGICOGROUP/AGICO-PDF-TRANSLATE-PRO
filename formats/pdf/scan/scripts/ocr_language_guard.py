@@ -104,8 +104,8 @@ def model_path() -> Path:
     return candidate
 
 
-def dictionary() -> list[str]:
-    candidate = model_path().resolve()
+def dictionary(rec_model: str | Path | None = None) -> list[str]:
+    candidate = (Path(rec_model) if rec_model else model_path()).resolve()
     stat = candidate.stat()
     # Cache metadata only, not the heavy ONNX session. A replacement model must
     # be rechecked, and callers must not be able to mutate the cached alphabet.
@@ -158,7 +158,7 @@ def unsupported_languages(languages: list[str], table: dict) -> list[dict]:
                 "script": script,
                 "characters": (entry or {}).get("characters", 0),
                 "minimum_required": (entry or {}).get("minimum_required"),
-                "reason": "the bundled recogniser cannot emit this script",
+                "reason": "the selected recogniser cannot emit this script",
             })
     return blocked
 
@@ -168,9 +168,10 @@ def main(argv=None) -> int:
     parser.add_argument("action", choices=("inspect", "require"))
     parser.add_argument("--languages", default="",
                         help="comma-separated language codes expected in the source")
+    parser.add_argument("--rec-model", help="Local ONNX recognition model to validate")
     args = parser.parse_args(argv)
 
-    table = coverage(dictionary())
+    table = coverage(dictionary(args.rec_model))
     languages = [item.strip().lower() for item in args.languages.split(",") if item.strip()]
 
     if args.action == "inspect" or not languages:

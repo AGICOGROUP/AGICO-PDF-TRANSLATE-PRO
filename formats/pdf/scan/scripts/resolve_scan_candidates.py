@@ -33,7 +33,7 @@ MIN_CHARS = 2         # a single stray glyph is noise, not a missed label
 SEGMENTS = 3          # very wide bands defeat the detector; retry as overlapping segments
 
 
-def _new_engine():
+def _new_engine(rec_model=None):
     """A crop-scale engine.
 
     The page pipeline raises the detector's ``limit_side_len`` to 8000/max so whole pages are not
@@ -43,7 +43,7 @@ def _new_engine():
     therefore get their own engine with stock detection settings.
     """
     from extract_scan import create_ocr_engine
-    return create_ocr_engine()
+    return create_ocr_engine(rec_model) if rec_model else create_ocr_engine()
 
 
 def _crop(image: Image.Image, box: list) -> Image.Image:
@@ -188,8 +188,13 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8-sig"))
+    model = manifest.get("recognition_model_override")
+    if model:
+        from extract_scan import sha256_file
+        if sha256_file(Path(model["path"])) != model["sha256"]:
+            raise SystemExit("Recognition model changed after extraction")
     try:
-        engine = _new_engine()
+        engine = _new_engine(model["path"]) if model else _new_engine()
     except ImportError:
         raise SystemExit("rapidocr-onnxruntime is required to resolve candidates")
     payload = resolve_candidates(manifest, engine, scales=(args.scale,))

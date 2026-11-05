@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -140,6 +141,46 @@ def resolve_rotation(page: pymupdf.Page, rect: pymupdf.Rect, dpi: int, level: in
     return 270 if counter > clockwise else 90
 
 
+def scan_regions(page, page_number, known, args, engine, regions):
+    """Read upright high-resolution crops while retaining original PDF coordinates."""
+    found = []
+    for region in regions:
+        rotation = region.get('rotation', 0)
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError('Recovery rotation must be cardinal')
+        clip = pymupdf.Rect(region['box']) & page.rect
+        if clip.is_empty:
+            raise ValueError(f'Empty recovery region on page {page_number + 1}')
+        matrix = pymupdf.Matrix(args.dpi / 72, args.dpi / 72).prerotate(rotation)
+        pix = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+        image = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+        if region.get('threshold', False):
+            image = image.convert('L').point(lambda value: 0 if value < args.threshold else 255)
+        for quad, text, score in ocr_image(image, engine):
+            text = str(text).strip()
+            if not text or float(score) < args.min_confidence:
+                continue
+            points = [pymupdf.Point(x + pix.x, y + pix.y) * ~matrix * page.derotation_matrix
+                      for x, y in quad]
+            box = pymupdf.Rect(min(p.x for p in points), min(p.y for p in points),
+                               max(p.x for p in points), max(p.y for p in points))
+            if box.is_empty or any((box & pymupdf.Rect(old)).get_area() / box.get_area() > .7
+                                   for old in known):
+                continue
+            direction = points[1] - points[0]
+            angle = math.degrees(math.atan2(-direction.y, direction.x))
+            found.append({'page': page_number, 'source': text, 'bbox': list(box),
+                          'confidence': round(float(score), 3),
+                          'rotation': (round(angle / 90) * 90) % 360})
+    retained = []
+    for item in sorted(found, key=lambda row: -row['confidence']):
+        if not any(cross_overlap(item['bbox'], old['bbox'], 0) > .7
+                   and cross_overlap(item['bbox'], old['bbox'], 1) > .7
+                   for old in retained):
+            retained.append(item)
+    return sorted(retained, key=lambda row: (row['bbox'][1], row['bbox'][0]))
+
+
 def scan_page(page: pymupdf.Page, page_number: int, known: list, args, engine) -> list:
     scale = args.dpi / 72.0
     found: list[dict] = []
@@ -172,7 +213,9 @@ def main(argv=None) -> int:
     parser.add_argument("--rows", type=int, default=2)
     parser.add_argument("--overlap", type=float, default=20.0)
     parser.add_argument("--dry-run", action="store_true", help="report candidates without touching the job")
+    parser.add_argument("--regions", type=Path, help="JSON list of reviewed page/box/rotation recovery regions")
     args = parser.parse_args(argv)
+    regions = load_json(args.regions) if args.regions else None
 
     job = args.job_dir
     inventory_path = job / "source-inventory.json"
@@ -192,16 +235,36 @@ def main(argv=None) -> int:
 
     engine = LazyOCR()
     document = pymupdf.open(job / "SOURCE.pdf")
+    if regions is not None:
+        if not isinstance(regions, list) or not regions or any(
+            not isinstance(region, dict)
+            or type(region.get('page')) is not int
+            or not 1 <= region['page'] <= len(document)
+            or not isinstance(region.get('box'), list)
+            or len(region['box']) != 4
+            or not all(type(value) in (int, float) and math.isfinite(value)
+                       for value in region['box'])
+            or region.get('rotation', 0) not in (0, 90, 180, 270)
+            for region in regions
+        ):
+            parser.error('regions must specify valid 1-based pages and finite rendered-page point boxes')
     added: list[dict] = []
     counters: dict[int, int] = {}
     for index, page in enumerate(document):
         known = [record["bbox"] for record in inventory["records"] if record["page"] == index]
-        for candidate in scan_page(page, index, known, args, engine):
+        if regions is None:
+            candidates = scan_page(page, index, known, args, engine)
+        else:
+            candidates = scan_regions(page, index, known, args, engine,
+                                      [region for region in regions if region['page'] == index + 1])
+        for candidate in candidates:
             box = candidate["bbox"]
             width, height = box[2] - box[0], box[3] - box[1]
             rotation = 0
             vertical = height > width * 3 and len(LETTER.findall(candidate["source"])) > 3
-            if vertical:
+            if 'rotation' in candidate:
+                rotation = candidate['rotation']
+            elif vertical:
                 rotation = resolve_rotation(page, pymupdf.Rect(*box), args.dpi, args.threshold, engine)
             counters[index] = counters.get(index, 0) + 1
             record_id = "p{0:04d}-{1}{2:05d}".format(index + 1, ID_PREFIX, counters[index])
@@ -215,7 +278,7 @@ def main(argv=None) -> int:
                 "id": record_id, "source": candidate["source"], "translation": "",
                 "status": "needs_translation", "page": index, "bbox": box,
                 "kind": "outline", "role": "body", "rotation": rotation,
-                "review_note": "recovered by recover_faint.py from the light-grey layer",
+                "review_note": "OCR recovery proposal; confirm source text, rotation and boundaries before use",
             })
             for context in packet.get("page_context", []):
                 if context.get("page") == index:
@@ -226,10 +289,29 @@ def main(argv=None) -> int:
                           "rotation": rotation, "confidence": candidate["confidence"],
                           "rotation_review_required": bool(vertical)})
 
+    bound_count = 0
+    if regions is not None and added:
+        from cad_batch import cell_proposals
+
+        recovered = {label['id'] for label in added}
+        placements = inventory.setdefault('placements', {})
+        for index in sorted({region['page'] - 1 for region in regions}):
+            records = [record for record in inventory['records'] if record['page'] == index]
+            proposals = cell_proposals(document[index], records, min_rule_length=6)
+            for record in packet['records']:
+                if record['id'] in recovered and record['id'] in proposals:
+                    proposal = proposals[record['id']]
+                    placements[record['id']] = proposal
+                    record['placement_proposal'] = proposal
+                    bound_count += 1
+
     report = {"passed": True, "tool": "recover_faint", "dpi": args.dpi,
+              "recovered_cell_proposals": bound_count,
               "threshold": args.threshold, "recovered": len(added),
               "vertical_labels": sum(1 for a in added if a["rotation"]),
-              "labels": added, "dry_run": args.dry_run}
+              "labels": added, "dry_run": args.dry_run,
+              "source_sha256": inventory.get("source_sha256"),
+              **({"regions": regions} if regions is not None else {})}
     write_json(job / "faint-labels.json", report)
     if not args.dry_run:
         write_json(inventory_path, inventory)

@@ -354,8 +354,10 @@ def annotate_images(job_dir: Path, metadata: Path, review: Path) -> None:
         raise ValueError("annotate-images requires native_translated stage")
     metadata_target = job_dir / "image-vector-metadata.json"
     review_target = job_dir / "image-review.json"
-    shutil.copy2(metadata, metadata_target)
-    shutil.copy2(review, review_target)
+    for supplied, destination in ((metadata, metadata_target), (review, review_target)):
+        if supplied.resolve() != destination.resolve() and not (
+                destination.exists() and supplied.samefile(destination)):
+            shutil.copy2(supplied, destination)
     review_data = json.loads(review_target.read_text(encoding="utf-8"))
     metadata_data = json.loads(metadata_target.read_text(encoding="utf-8"))
     if not review_data.get("complete"):

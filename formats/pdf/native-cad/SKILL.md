@@ -30,12 +30,24 @@ translation-packet, translation-units and whole-sheet/crop review artifacts.
 For sparse or visibly incomplete outline/image labels use `--ocr always`; inspect
 source-script capability before trusting recognizer output. Native extraction is
 not proof of coverage of raster or font-outline labels.
+Records marked `hidden_text_hint_requires_source_review` are located reading
+hints, not editable visible glyphs. Compare their words and boxes with the source
+render; use the existing outline-cover review and geometry guard for replacement.
+Removing only their hidden text will leave visible source outlines underneath.
+Final saves subset embedded fonts; verify selectable text and rendered glyphs
+after saving, rather than embedding the complete CJK font in every drawing.
 
 Inspect full sheets, including title/revision tables and faint grey layers.
 Record crops expose detected items only. If faint/outline source ink is missing
 from the inventory, use `scripts/recover_faint.py <job>` once, before translation;
-its 600dpi thresholded recovery is a targeted remedy, not a mandatory rerun of
-ordinary dense text pages. Decide its needs_translation records before apply.
+for rotated dense tables and outlined notes, pass `--regions <regions.json>`
+with a list of reviewed regions. Each region has a 1-based `page`, a `box` in
+displayed page points, and the clockwise `rotation` that makes it upright.
+The tool reads those regions at 600 dpi and maps proposals back to source
+coordinates. An optional `threshold: true` enhances faint ink within a region.
+Compare the full table against the image, including cell ownership, codes and
+quantities, before deciding the recovered records. Run recovery before entering
+translation decisions for those records.
 Still-blurry regions follow the shared two-attempt source-limitation policy.
 
 ## Translate complete labels and requirements
