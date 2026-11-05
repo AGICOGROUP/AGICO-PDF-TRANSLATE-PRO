@@ -18,6 +18,11 @@ with source hash, target language, mode, ordered selected pages and one entry pe
 page: source page number, strategy, reason, width/height in points and render path.
 Preserve source page numbers throughout; output positions are a separate mapping.
 Record `preserve_raster` for every page; content determines grouping and placement, not a different page strategy.
+Original pagination is the default. Apply the shared pagination policy only after
+full-cell/paragraph fitting and verified safe whitespace have been exhausted.
+Explicit prose/list continuations need a source-to-output map, complete segment
+ownership and updated references; unsupported table or destination flow blocks
+completion. A fixed OCR glyph box is not evidence that a new page is necessary.
 
 ```powershell
 python scripts/classify_pdf.py --source "input.pdf"
@@ -80,13 +85,15 @@ no recognition. This does not reset earlier inspections/OCR: consult the job's
 existing attempt history before any targeted retry, including drawing regions
 already inspected twice.
 
-Detection is not resolution. Every candidate must reach a terminal disposition
-before a build, because `validate_manifest` now rejects a manifest carrying an
-undispositioned candidate. `resolve_scan_candidates.py` performs the one allowed
-targeted re-OCR per candidate and records `non_text` / `illegible` when the crop
-yields nothing legible, so a missed-but-readable line can never flow into the
-deliverable unnoticed. `recovered` rows are reported, not silently applied: bind
-them with `register_source_supplements.py` first.
+Detection is not resolution. Every candidate needs a source-based terminal
+disposition before build. Read its actual crop first: clear words enter complete
+translated units; confirmed non-text retains a visual reason; inspected numeric,
+formula, code, symbol or justified proper-name ink may use `preserved_ink` with
+independent exact-pixel verification instead of inventing OCR text. Use the
+resolver only for a genuinely unresolved region's remaining recognition attempt.
+An empty crop OCR alone never proves non-text or illegibility. Bind genuinely
+recovered words with `register_source_supplements.py`; the verifier still requires
+the actual source judgment, current coverage and rendered comparison.
 
 ```powershell
 python scripts/audit_scan_inventory.py --manifest "job/manifest/translation-manifest.json" --output "job/manifest/translation-manifest.json"

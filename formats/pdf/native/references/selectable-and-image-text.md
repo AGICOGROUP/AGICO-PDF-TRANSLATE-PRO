@@ -77,7 +77,9 @@ Use these invariants:
 2. Merge compatible source lines into one paragraph flow. Fit the translation
    once across the original line slots so every line uses one font size.
 3. Preserve left/center/right alignment. A symmetric full-width body line is
-   body copy, not a centered title.
+   body copy, not a centered title. Within tables infer alignment from source
+   glyph margins in the physical cell, excluding neighboring columns; nearly
+   full-width or conflicting source lines conservatively stay left aligned.
 4. Use embedded-image boxes as exclusion geometry. A continuation slot that
    intersects most of an image is forbidden.
 5. Segment table text by physical cell, including extraction blocks that cross
@@ -100,9 +102,19 @@ Use these invariants:
    `max(9.5 pt, 60% of source size)` is diagnostic, not a hard gate.
 10. Treat new numbered items as paragraph boundaries, but do not mistake decimal
     values such as `0.5` for list numbers. Semicolon-separated equipment lists
-    remain one flow.
+    remain one flow. Short symbol definitions such as `AA = Equipment Code`
+    start separate flows; an unmarked wrapped continuation can join its definition.
 11. Preserve header/footer source size and verified visual weight. Replacement
-    font metrics may require a taller container, not a smaller font.
+    font metrics may require a taller container, not a smaller font. Right-side
+    footer labels retain their source right edge rather than the default page margin.
+    For an unchanged contact footer, keep source glyph positions and baselines so
+    original hyperlink hit areas and vector underlines remain registered. When a
+    footer contains one mailto link, translated labels may fit before/after its
+    anchored email at the source baseline, only with verified free horizontal
+    space and complete source matrix evidence. Validate both label widths before
+    painting. This requires a single source line/baseline and a single target line;
+    reviewed text geometry shifts invalidate the original decoration anchors.
+    Unsafe/multiple-link cases use normal layout and require visual review.
 12. Derive numbered heading depth from the complete prefix: `4、` is level 1,
     `4.1、` is level 2, and `4.1.2` is level 3. A bold decimal measurement or
     sentence with clause punctuation remains body text. If a wrapped heading
@@ -144,12 +156,13 @@ Use this order:
 5. Fit only genuinely overflowing paragraphs at a smaller uniform paragraph
    size; do not shrink unrelated body text. Keep heading hierarchy and actual
    readability. Cosmetic differences do not require another reconstruction.
-6. If the content still cannot fit safely, report the limitation. Additional
-   pages require user approval, not an automatic continuation-page fallback.
+6. If translation expansion still cannot fit readably, use necessary continuation
+   pages following [PDF pagination](../../../../references/pdf-pagination.md).
+   No further approval is required for this case; retain the source formatting.
 
 This is an adaptive decision sequence, not permission to redesign arbitrarily:
-keep page count, visual hierarchy, object order, colors, and source identity
-unless the user explicitly authorizes a broader redesign.
+keep visual hierarchy, object order, colors, and source identity. Page count may
+increase only as needed for translation expansion under that pagination policy.
 
 ## Proven recovery strategy
 

@@ -43,6 +43,17 @@ paragraph. After recovering a missing source line, use explicit IDs to restore
 the whole affected sentence, removing superseded block ownership. Resolve the
 page's OCR review candidates before treating the translation as complete.
 
+Candidate dispositions use two artifact-specific vocabularies. In decisions.json
+and the compiled manifest, `candidate_dispositions` is keyed by candidate ID;
+each record uses `disposition: recovered`, `preserved`, `non_text`, `illegible`
+or `preserved_ink`. In translation-review.json corrections/source_limitations,
+the corresponding value for recovered and translated text is `supplemented`;
+the other four names stay the same. `supplemented` belongs only to the review.
+For recovered text, register located source lines in `supplements`, assign their
+IDs to translated regions, and bind those IDs in the review's `source_line_ids`.
+Both artifacts must describe the same inspected candidate and source geometry;
+changing a disposition name alone does not establish coverage or a valid review.
+
 Optional `source` records a visually checked OCR correction. `box` controls target
 placement, while `clean_boxes` defaults to the individual source glyph boxes.
 Changing target width never enlarges cleanup. Optional `background` is `sample`

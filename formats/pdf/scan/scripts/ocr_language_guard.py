@@ -23,6 +23,7 @@ import json
 import sys
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 SCRIPT_TOKENS = ("CYRILLIC", "GREEK", "ARABIC", "HEBREW", "THAI", "HIRAGANA",
@@ -84,27 +85,50 @@ def script_of(character: str) -> str | None:
 
 def model_path() -> Path:
     import rapidocr_onnxruntime
+    import yaml
 
-    candidate = (Path(rapidocr_onnxruntime.__file__).parent / "models"
-                 / "ch_PP-OCRv4_rec_infer.onnx")
-    if not candidate.exists():
+    # Follow the same Rec.model_path used by RapidOCR(), rather than guessing
+    # a model version or inspecting an inactive model left in the package.
+    root = Path(rapidocr_onnxruntime.__file__).resolve().parent
+    config_path = root / "config.yaml"
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        selected = config["Rec"]["model_path"]
+        if not isinstance(selected, str) or not selected.strip():
+            raise ValueError("Rec.model_path must be a nonempty string")
+    except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError) as error:
+        raise SystemExit(f"cannot determine active recognition model from {config_path}: {error}") from error
+    candidate = (root / selected).resolve()
+    if not candidate.is_file():
         raise SystemExit("recognition model not found at %s" % candidate)
     return candidate
 
 
-def dictionary() -> list[str]:
+def dictionary(rec_model: str | Path | None = None) -> list[str]:
+    candidate = (Path(rec_model) if rec_model else model_path()).resolve()
+    stat = candidate.stat()
+    # Cache metadata only, not the heavy ONNX session. A replacement model must
+    # be rechecked, and callers must not be able to mutate the cached alphabet.
+    return list(_model_dictionary(str(candidate), stat.st_size, stat.st_mtime_ns))
+
+
+@lru_cache(maxsize=4)
+def _model_dictionary(path: str, size: int, modified_ns: int) -> tuple[str, ...]:
     import onnxruntime as ort
 
-    session = ort.InferenceSession(str(model_path()), providers=["CPUExecutionProvider"])
+    session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     raw = session.get_modelmeta().custom_metadata_map.get("character")
     if not raw:
         raise SystemExit("recognition model exposes no character metadata")
-    return [entry for entry in raw.split("\n") if entry]
+    entries = tuple(entry for entry in raw.splitlines() if entry)
+    if not entries:
+        raise SystemExit("recognition model exposes no character metadata")
+    return entries
 
 
 def coverage(entries: list[str]) -> dict:
     counts = Counter()
-    for entry in entries:
+    for entry in set(entries):
         counts[script_of(entry)] += 1
     report = {}
     for script, count in counts.items():
@@ -134,7 +158,7 @@ def unsupported_languages(languages: list[str], table: dict) -> list[dict]:
                 "script": script,
                 "characters": (entry or {}).get("characters", 0),
                 "minimum_required": (entry or {}).get("minimum_required"),
-                "reason": "the bundled recogniser cannot emit this script",
+                "reason": "the selected recogniser cannot emit this script",
             })
     return blocked
 
@@ -144,9 +168,10 @@ def main(argv=None) -> int:
     parser.add_argument("action", choices=("inspect", "require"))
     parser.add_argument("--languages", default="",
                         help="comma-separated language codes expected in the source")
+    parser.add_argument("--rec-model", help="Local ONNX recognition model to validate")
     args = parser.parse_args(argv)
 
-    table = coverage(dictionary())
+    table = coverage(dictionary(args.rec_model))
     languages = [item.strip().lower() for item in args.languages.split(",") if item.strip()]
 
     if args.action == "inspect" or not languages:

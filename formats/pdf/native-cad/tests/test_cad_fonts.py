@@ -43,3 +43,23 @@ def test_supported_font_is_kept(tmp_path):
     assert cad.apply(job, job / cad.PACKET_NAME, cad.DEFAULT_FONT) == 0
     report = cad.read_json(job / cad.APPLY_REPORT_NAME)
     assert report['font_file'] == str(cad.DEFAULT_FONT)
+
+
+def test_saved_cjk_font_is_subset_without_changing_render_or_text(tmp_path, monkeypatch):
+    text = '内侧密封环 A-A 123 Ø'
+    job = translated_job(tmp_path, text)
+    expected = []
+    original = pymupdf.Document.subset_fonts
+
+    def observed(document, *args, **kwargs):
+        expected.append(document[0].get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).samples)
+        return original(document, *args, **kwargs)
+
+    monkeypatch.setattr(pymupdf.Document, 'subset_fonts', observed)
+    assert cad.apply(job, job / cad.PACKET_NAME, cad.DEFAULT_FONT) == 0
+    assert expected, 'final save must subset the embedded CJK font'
+    output = job / cad.OUTPUT_NAME
+    assert output.stat().st_size < cad.DEFAULT_FONT.stat().st_size * .2
+    with pymupdf.open(output) as document:
+        assert text in document[0].get_text()
+        assert document[0].get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False).samples == expected[0]

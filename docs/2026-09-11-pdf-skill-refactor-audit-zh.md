@@ -1,3 +1,5 @@
+> 命名说明：本技能族已于 2026-09-17 统一命名为 PDF-TRANSLATE-PRO / -ROUTER / -NATIVE / -SCAN / -BILINGUAL / -NATIVE-CAD / -IMAGE；下文涉及的旧标识已就地更新为统一名称。
+
 # PDF 翻译技能深度审计与重构建议
 
 日期：2026-09-11。审计基线：`dade7e537b4ca36a8541b40de169b741bdcd68e2`。
@@ -31,7 +33,7 @@
    ```
 
 4. 无文件写入的小型诊断复现了：语言完成判断不要求具体语言身份；原生 CAD 页外布局通过参数校验与试排；路由受到纸张尺寸和其他页面文字密度影响。
-5. 安装目录 `C:/Users/Administrator/.codex/skills/translate-documents-and-images-professionally` 是指向当前仓库的 Junction。保留 main 分支只保留了 Git 基线，**没有隔离当前安装中的执行版本**。
+5. 安装目录 `C:/Users/Administrator/.codex/skills/PDF-TRANSLATE-PRO` 是指向当前仓库的 Junction。保留 main 分支只保留了 Git 基线，**没有隔离当前安装中的执行版本**。
 
 测试通过说明现有被测行为稳定，不说明以下新发现不存在，也不代表真实译件全部合格。
 

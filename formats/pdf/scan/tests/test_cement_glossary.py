@@ -12,9 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GLOSSARY = ROOT / "references" / "cement-terminology.md"
 LOOKUP = ROOT / "scripts" / "glossary_lookup.py"
-# User-supplied revised glossary, canonical LF; checkout line endings are not content.
-# Re-pinned 2026-09-22 after splitting the row-collapsed entry 研磨剂（材料）Abrasive弯矩 back into Abrasive and Moment rows.
-EXPECTED_SHA256 = "af7791f420ff5c3d3f9b254ebcd5dd1a6057becc0eae056f72077eca41012b12"
+# User-supplied 2.0 glossary, canonical LF; checkout line endings are not content.
+EXPECTED_SHA256 = "ecc54bab1dd8cfd63b7990e872837e15d704eac8414a5abbb1cb4adf51416a1a"
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:

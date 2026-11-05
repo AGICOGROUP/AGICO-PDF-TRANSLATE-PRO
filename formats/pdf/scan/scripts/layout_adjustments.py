@@ -24,7 +24,7 @@ def _overlaps(first: tuple[float, float, float, float], second: tuple[float, flo
     return min(first[2], second[2]) > max(first[0], second[0]) and min(first[3], second[3]) > max(first[1], second[1])
 
 
-def validate_layout_adjustment(item: dict, page_width: float, page_height: float, protected_boxes: Iterable[list[float]]) -> dict:
+def validate_layout_adjustment(item: dict, page_width: float, page_height: float, protected_boxes: Iterable[list[float]], *, original_protected_boxes=None) -> dict:
     if item.get("trigger") != "text_does_not_fit" or item.get("fit_failure") is not True:
         raise LayoutAdjustmentError("image adjustment requires a recorded text fit failure")
     original = _box(item.get("original_box"), "original_box")
@@ -43,10 +43,15 @@ def validate_layout_adjustment(item: dict, page_width: float, page_height: float
     approved = [_box(region, "approved_background_region") for region in item.get("approved_background_regions", [])]
     if not any(_contains(region, original) for region in approved):
         raise LayoutAdjustmentError("vacated image area is not an approved background region")
-    for protected in protected_boxes:
+    protected_boxes = list(protected_boxes)
+    source_protected = (original_protected_boxes if item.get("vacate_for_text") is True
+                        and original_protected_boxes is not None else protected_boxes)
+    for protected in source_protected:
         protected_box = _box(protected, "protected_box")
         if _overlaps(original, protected_box):
             raise LayoutAdjustmentError("original image contains protected content")
+    for protected in protected_boxes:
+        protected_box = _box(protected, "protected_box")
         if _overlaps(target, protected_box):
             raise LayoutAdjustmentError("target image overlaps protected content")
     return {"original_box": list(original), "target_box": list(target), "scale": geometric_scale}

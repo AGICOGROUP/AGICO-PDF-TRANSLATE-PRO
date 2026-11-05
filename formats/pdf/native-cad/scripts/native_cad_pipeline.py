@@ -54,6 +54,79 @@ def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def restore_preserved_native_glyphs(document, source_path, inventory, records, supplied):
+    """Replay explicitly reviewed preserved glyph regions as source vector paths.
+
+    Native character metrics may extend into a neighbouring redaction despite
+    their visible ink being separate. Do not re-create brand artwork with a new
+    font, or duplicate the underlying raster: retain original SVG glyph outlines.
+    """
+    entries=inventory.get('reviewed_protected_native_replay', [])
+    if not entries:
+        return
+    import xml.etree.ElementTree as ET
+    ET.register_namespace('', 'http://www.w3.org/2000/svg')
+    ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
+    with pymupdf.open(source_path) as original:
+        for entry in entries:
+            record=records[entry['id']]
+            if (record.get('kind','native')!='native' or supplied.get(entry['id'],{}).get('status')!='preserved'
+                    or not str(entry.get('note','')).strip()):
+                raise ValueError('Protected native replay needs a preserved source record and actual review')
+            rect=pymupdf.Rect(record['bbox']);page=original[record['page']]
+            if rect.is_empty or not page.rect.contains(rect):
+                raise ValueError('Protected native replay region is outside source page')
+            root=ET.fromstring(page.get_svg_image(text_as_path=True))
+            for parent in root.iter():
+                for child in list(parent):
+                    if child.tag.rsplit('}',1)[-1]=='image':parent.remove(child)
+            root.set('viewBox',f'{rect.x0} {rect.y0} {rect.width} {rect.height}')
+            root.set('width',str(rect.width));root.set('height',str(rect.height))
+            with pymupdf.open(stream=ET.tostring(root,encoding='utf-8'),filetype='svg') as svg:
+                with pymupdf.open(stream=svg.convert_to_pdf(),filetype='pdf') as glyphs:
+                    if glyphs[0].get_image_info():
+                        raise ValueError('Protected native replay must contain vector glyphs only')
+                    document[record['page']].show_pdf_page(rect,glyphs,0,overlay=True)
+
+
+def raster_cover_evidence(page, boxes, page_images=None):
+    """Bind a reviewed raster-text cover to source pixels and a sampled light fill.
+
+    This proves identity/background only. The agent must still inspect that the
+    region is text-only, including table borders and signatures, before approval.
+    """
+    import numpy as np
+    from PIL import Image
+    if page.rotation:
+        raise ValueError('Raster text cover needs an upright source page')
+    cache = page_images if page_images is not None else {}
+    key = (id(page.parent), page.number)
+    if key not in cache:
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
+        cache[key] = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
+    image = cache[key]
+    evidence = []
+    for box in boxes:
+        rect = pymupdf.Rect(box)
+        if rect.is_empty or not page.rect.contains(rect):
+            raise ValueError('Raster text cover is outside source page')
+        crop = image.crop((math.floor(rect.x0*2), math.floor(rect.y0*2),
+                           math.ceil(rect.x1*2), math.ceil(rect.y1*2)))
+        pixels = np.asarray(crop).reshape(-1, 3)
+        # Scanned grey/green paper varies across JPEG quantization boundaries;
+        # a 32-level cluster represents one flat field despite small scan noise.
+        bins = pixels.astype(np.int32)//32
+        keys = bins[:, 0]*64 + bins[:, 1]*8 + bins[:, 2]
+        mode = int(np.bincount(keys, minlength=512).argmax())
+        selected = pixels[keys == mode]
+        color = np.median(selected, axis=0)
+        if len(selected)/len(pixels) < .30 or float(color.mean()) < 128:
+            raise ValueError('Raster cover has no uniform light text background')
+        evidence.append({'box': list(box), 'pixel_sha256': hashlib.sha256(crop.tobytes()).hexdigest(),
+                         'background_rgb': [round(float(v)/255, 6) for v in color]})
+    return evidence
+
+
 def is_protected(text: str) -> bool:
     value = " ".join(text.split())
     if not value:
@@ -87,6 +160,10 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for page_index, page in enumerate(document):
         span_index = 0
+        traced = {}
+        for item in page.get_texttrace():
+            value = ' '.join(''.join(chr(c[0]) for c in item['chars']).split())
+            traced.setdefault((value, item['font']), []).append(item)
         blocks = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT)["blocks"]
         for block in blocks:
             if block.get("type") != 0:
@@ -100,6 +177,12 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
                         continue
                     span_index += 1
                     protected = is_protected(text)
+                    rect = pymupdf.Rect(span['bbox'])
+                    matching = [item for item in traced.get((text, span.get('font')), [])
+                                if (rect & pymupdf.Rect(item['bbox'])).get_area()
+                                >= .6 * min(rect.get_area(), pymupdf.Rect(item['bbox']).get_area())]
+                    hidden = matching and all(item['type'] == 3 or item.get('opacity',1) <= 0
+                                              for item in matching)
                     records.append(
                         {
                             "id": f"p{page_index + 1:04d}-s{span_index:05d}",
@@ -110,6 +193,8 @@ def extract_records(document: pymupdf.Document) -> list[dict[str, object]]:
                             "color": int(span.get("color", 0)),
                             "rotation": rotation,
                             "status": "protected" if protected else "pending",
+                            **({'kind':'outline', 'reading_method':'hidden_text_hint_requires_source_review'}
+                               if hidden else {}),
                         }
                     )
     return records
@@ -213,6 +298,7 @@ def prepare(source: Path, job_dir: Path, ocr: str = 'auto', *,
                 "page": record['page'],
                 "bbox": record['bbox'],
                 "kind": record.get('kind', 'native'),
+                **({'reading_method': record['reading_method']} if record.get('reading_method') else {}),
                 "role": 'body',
                 **({'placement_proposal': placement[record['id']]} if record['id'] in placement else {}),
                 **({'layout_box': placement[record['id']]['layout_box']}
@@ -550,24 +636,41 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
     restore_by_page: dict[int, set[int]] = {}
     hidden_path_cache: dict[int, dict[int, bool]] = {}
     drawings_by_page = {}
+    raster_pages = {}
+    raster_fills = {}
     for page_index, records in by_page.items():
-        drawings = drawing_index(document[page_index]) if any(r.get('kind') == 'outline' for r in records) else []
+        drawings = drawing_index(document[page_index]) if any(
+            r.get('kind') == 'outline' or supplied[str(r['id'])].get('cover_review', {}).get('raster_text_cover')
+            for r in records) else []
         drawings_by_page[page_index] = drawings
         for record in records:
-            if record.get('kind') != 'outline':
-                continue
             translated = supplied[str(record['id'])]
             review = translated.get('cover_review', {})
+            if record.get('kind') != 'outline' and not review.get('raster_text_cover'):
+                continue
             # Explicit agent pixel review, never inferred from OCR confidence.
             boxes = translated.get('cover_boxes', [record['bbox']])
             layout_box = translated.get('layout_box', record['bbox'])
             reasons = []
+            raster_verified = False
+            if review.get('raster_text_cover'):
+                try:
+                    measured = raster_cover_evidence(document[page_index], boxes, raster_pages)
+                    raster_verified = measured == review['raster_text_cover']
+                    if raster_verified:
+                        raster_fills[record['id']] = measured
+                except (ValueError, TypeError, KeyError, IndexError):
+                    pass
+                if not raster_verified:
+                    reasons.append('stale_or_unsafe_raster_text_cover')
             if not boxes:
                 reasons.append('empty_cover_boxes')
             if translated.get('rotation', record['rotation']) not in (0, 90, 180, 270):
                 reasons.append('unsupported_rotation')
             for box in dict.fromkeys(tuple(b) for b in boxes):
                 box_reasons = cover_conflicts(document[page_index], box, drawings)
+                if raster_verified:
+                    box_reasons = [reason for reason in box_reasons if reason != 'image']
                 if review.get('source_text_paths') is True:
                     threshold = max(24., min(pymupdf.Rect(record['bbox']).width, pymupdf.Rect(record['bbox']).height) * 2.5)
                     source_rect = pymupdf.Rect(record['bbox']) + (-2, -2, 2, 2)
@@ -582,14 +685,16 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                 if not pymupdf.Rect(box).intersects(pymupdf.Rect(record['bbox'])):
                     reasons.append('region_not_adjacent_to_source')
                 for other in inventory['records']:
-                    if other['page'] == page_index and other['id'] != record['id'] and other.get('kind') != 'outline' and pymupdf.Rect(box).intersects(pymupdf.Rect(other['bbox'])):
+                    if other['page'] == page_index and other['id'] != record['id'] and other.get('kind') != 'outline' and pymupdf.Rect(box).intersects(pymupdf.Rect(other['bbox'])) and not (supplied.get(other['id'], {}).get('status') == 'merged' and supplied[other['id']].get('merged_into') == record['id']):
                         reasons.append(f'other_native_text:{other["id"]}')
             page = document[page_index]
             if not (page.rect * page.derotation_matrix).contains(pymupdf.Rect(layout_box)):
                 reasons.append('layout_outside_page')
             if not pymupdf.Rect(layout_box).intersects(pymupdf.Rect(record['bbox'])):
                 reasons.append('layout_not_adjacent_to_source')
-            if not all(review.get(k) is True for k in ('approved', 'text_only', 'white_background')) or not review.get('note'):
+            if (not all(review.get(k) is True for k in ('approved', 'text_only'))
+                    or not (review.get('white_background') is True or raster_verified)
+                    or not review.get('note')):
                 reasons.append('source_pixel_review_required')
             restorable = {'crossing_path', 'symbol_or_frame', 'filled_region', 'curve'}
             if reasons and review.get('restore_conflicting_paths') is True and all(reason.split(':')[0] in restorable for reason in reasons):
@@ -606,6 +711,9 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
                     reasons = []
             if reasons:
                 unsafe.append({'id': record['id'], 'reasons': reasons})
+        # Each page is visited once; later placement needs sampled fills, not
+        # full-page validation bitmaps. Keep reuse within the current page.
+        raster_pages.clear()
     if unsafe:
         document.close()
         write_json(report_path, {'passed': False, 'failures': ['unsafe_outline_regions'], 'regions': unsafe, 'fit_failures': []})
@@ -632,13 +740,16 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
         page = document[page_index]
         records = [r for r in records if r['id'] not in fit_failures]
         for record in records:
-            if record.get('kind') != 'outline':
-                page.add_redact_annot(pymupdf.Rect(record["bbox"]), fill=None, cross_out=False)
+            if record.get('kind') not in ('outline','manual_annotation'):
+                boxes=supplied[str(record['id'])].get('cover_boxes',[record['bbox']])
+                for box in boxes:
+                    page.add_redact_annot(pymupdf.Rect(box), fill=None, cross_out=False)
         page.apply_redactions(images=0, graphics=0, text=0)
         for record in records:
-            if record.get('kind') == 'outline':
-                for box in supplied[str(record['id'])].get('cover_boxes', [record['bbox']]):
-                    page.draw_rect(pymupdf.Rect(box), color=None, fill=(1, 1, 1), overlay=True)
+            if record.get('kind') == 'outline' or record['id'] in raster_fills:
+                for index, box in enumerate(supplied[str(record['id'])].get('cover_boxes', [record['bbox']])):
+                    fill = raster_fills[record['id']][index]['background_rgb'] if record['id'] in raster_fills else (1, 1, 1)
+                    page.draw_rect(pymupdf.Rect(box), color=None, fill=fill, overlay=True)
         if restore_by_page.get(page_index):
             redraw_paths(page, [drawings_by_page[page_index]['paths'][index] for index in sorted(restore_by_page[page_index])])
 
@@ -668,6 +779,10 @@ def apply(job_dir: Path, packet_path: Path, font_file: Path) -> int:
             applied_records.append({"id": record["id"], "font_size": fitted_size, 'baseline_font_size': baseline,
                                     'shrink_reason': 'complete_paragraph_overflow' if fitted_size < baseline else None})
 
+    restore_preserved_native_glyphs(document,bound_source,inventory,
+                                   {r['id']:r for r in inventory['records']},supplied)
+    # Embed only used glyphs; a complete CJK font otherwise adds ~15 MB per drawing.
+    document.subset_fonts()
     output = job_dir / OUTPUT_NAME
     if fit_failures:
         preview = job_dir / 'translated-native-cad-preview.pdf'

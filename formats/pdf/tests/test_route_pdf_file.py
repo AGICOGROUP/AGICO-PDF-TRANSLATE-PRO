@@ -309,6 +309,48 @@ class PdfRouterContractTests(unittest.TestCase):
             self.assertEqual(0, report["page_count"])
             self.assertIn("no pages", report["error"])
 
+    def test_output_saves_exact_success_report_and_overwrites_previous_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_text_pdf(root / "native.pdf", "Native report")
+            output = root / "job" / "route-report.json"
+            output.parent.mkdir()
+            output.write_text("old report", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROUTER), str(source), "--output", str(output)],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(json.loads(result.stdout), json.loads(output.read_text(encoding="utf-8")))
+            self.assertEqual("native-text", json.loads(result.stdout)["pdf_type"])
+            self.assertEqual([output], list(output.parent.iterdir()))
+
+    def test_output_persists_error_report_in_new_job_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "invalid.pdf"
+            source.write_bytes(b"invalid source")
+            output = root / "job" / "route-report.json"
+            result = subprocess.run(
+                [sys.executable, str(ROUTER), str(source), "--output", str(output)],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            self.assertEqual(2, result.returncode, result.stderr)
+            saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(json.loads(result.stdout), saved)
+            self.assertIn("signature", saved["error"])
+
+    def test_output_cannot_overwrite_source_pdf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_text_pdf(Path(directory) / "native.pdf")
+            original = source.read_bytes()
+            result = subprocess.run(
+                [sys.executable, str(ROUTER), str(source), "--output", str(source)],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            self.assertEqual(2, result.returncode)
+            self.assertEqual(original, source.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

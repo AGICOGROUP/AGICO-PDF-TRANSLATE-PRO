@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import math
+import re
 
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
@@ -101,7 +102,7 @@ def _validate_rich_lines(block: dict, page: dict) -> None:
 
 # A candidate is terminal once it has been dispositioned, or once a registered source line covers
 # its ink (the recovered case). Anything else must stop the build.
-TERMINAL_CANDIDATE_DISPOSITIONS = {"recovered", "non_text", "illegible", "preserved"}
+TERMINAL_CANDIDATE_DISPOSITIONS = {"recovered", "non_text", "illegible", "preserved", "preserved_ink"}
 
 
 def _covered_fraction(inner: list, outer: list) -> float:
@@ -113,6 +114,22 @@ def _covered_fraction(inner: list, outer: list) -> float:
         return 0.0
     area = max((float(inner[2]) - float(inner[0])) * (float(inner[3]) - float(inner[1])), 1e-9)
     return (x1 - x0) * (y1 - y0) / area
+
+
+def _covered_by_boxes(inner, boxes):
+    if any(_covered_fraction(inner, box) >= .8 for box in boxes):
+        return True
+    rects = [(max(inner[0],b[0]), max(inner[1],b[1]), min(inner[2],b[2]), min(inner[3],b[3]))
+             for b in boxes if min(inner[2],b[2]) > max(inner[0],b[0])
+             and min(inner[3],b[3]) > max(inner[1],b[1])]
+    xs = sorted({x for r in rects for x in (r[0],r[2])})
+    area = 0
+    for left,right in zip(xs,xs[1:]):
+        end = inner[1]; height = 0
+        for top,bottom in sorted((r[1],r[3]) for r in rects if r[0] < right and r[2] > left):
+            height += max(0,bottom-max(end,top)); end=max(end,bottom)
+        area += (right-left)*height
+    return area >= .8 * max((inner[2]-inner[0])*(inner[3]-inner[1]),1e-9)
 
 
 def unresolved_scan_candidates(manifest: dict) -> list:
@@ -143,18 +160,46 @@ def unresolved_scan_candidates(manifest: dict) -> list:
                     # by registered source lines instead.
                     page_lines = [line for line in lines if line.get("page") == number
                                   and isinstance(line.get("box"), list)]
-                    covered = any(_covered_fraction(candidate["box"], line["box"]) >= 0.8
-                                  for line in page_lines)
+                    covered = _covered_by_boxes(candidate['box'], [line['box'] for line in page_lines])
                     if not covered:
                         pending.append(cid if cid else f"page {number} recovered")
                         continue
                 continue
             box = candidate.get("box")
-            if isinstance(box, list) and len(box) == 4 and any(
-                    _covered_fraction(box, other) >= 0.8 for other in page_boxes):
+            if isinstance(box, list) and len(box) == 4 and _covered_by_boxes(box, page_boxes):
                 continue
             pending.append(cid if cid else f"page {number} box {box}")
     return pending
+
+
+def validate_source_paths(block: dict, width: int, height: int) -> None:
+    """Validate measured source restoration, never inferred drawing geometry."""
+    if 'protected_source_paths' not in block:
+        return
+    paths = block['protected_source_paths']
+    if block.get('action') != 'replace' or not isinstance(paths, list) or not paths:
+        raise ManifestError('protected_source_paths requires a nonempty replacement path list')
+    def numeric(value):
+        return type(value) in (int, float) and math.isfinite(value)
+    if not all(numeric(v) and v > 0 and int(v) == v for v in (width, height)):
+        raise ManifestError('source paths require positive pixel canvas dimensions')
+    for path in paths:
+        if not isinstance(path, dict):
+            raise ManifestError('source path must be an object')
+        stroke = path.get('width')
+        note = path.get('review_note')
+        points = path.get('points')
+        if not numeric(stroke) or not 0 < stroke <= 3:
+            raise ManifestError('source path width must be finite numeric and <=3 pixels')
+        if not isinstance(note, str) or not note.strip():
+            raise ManifestError('source path requires a source-based review note')
+        if not isinstance(points, list) or not 2 <= len(points) <= 256:
+            raise ManifestError('source path requires 2..256 measured points')
+        for point in points:
+            if (not isinstance(point, (list, tuple)) or len(point) != 2
+                    or not all(numeric(v) for v in point)
+                    or not 0 <= point[0] < width or not 0 <= point[1] < height):
+                raise ManifestError('source path point is outside the immutable source canvas')
 
 
 def validate_manifest(manifest: dict) -> dict:
@@ -184,6 +229,19 @@ def validate_manifest(manifest: dict) -> dict:
             and isinstance(block.get("box"), list)
             and len(block["box"]) == 4
         ]
+        block_boxes.extend(segment['box'] for block in blocks if block.get('page') == page_number
+                           for segment in block.get('segments', []) if isinstance(segment.get('box'), list))
+        source_boxes = list(page.get('protected_boxes', []))
+        for block in blocks:
+            if block.get('page') != page_number:
+                continue
+            if block.get('action') == 'replace':
+                source_boxes.extend(block.get('clean_boxes') or ([block['clean_box']] if block.get('clean_box') else []))
+            else:
+                source_boxes.extend(source_by_id[sid]['box'] for sid in block.get('source_line_ids', [])
+                                    if sid in source_by_id)
+        source_boxes.extend(c['box'] for c in page.get('ocr_review_candidates', [])
+                            if manifest.get('candidate_dispositions', {}).get(c['id'], {}).get('disposition') == 'preserved_ink')
         for adjustment in page.get("layout_adjustments", []):
             try:
                 validate_layout_adjustment(
@@ -191,6 +249,7 @@ def validate_manifest(manifest: dict) -> dict:
                     float(page["pixel_width"]),
                     float(page["pixel_height"]),
                     [*page.get("protected_boxes", []), *block_boxes],
+                    original_protected_boxes=source_boxes,
                 )
             except LayoutAdjustmentError as exc:
                 raise ManifestError(
@@ -211,6 +270,11 @@ def validate_manifest(manifest: dict) -> dict:
     preserve_count = 0
     for block in blocks:
         block_id = block.get("id", "<unknown>")
+        if 'protected_source_paths' in block:
+            page = page_index.get(block.get('page'), {})
+            if page.get('layout_adjustments') or page.get('prose_frame_reflows'):
+                raise ManifestError('source paths require an unchanged immutable raster layout')
+            validate_source_paths(block, page.get('pixel_width'), page.get('pixel_height'))
         required = ("page", "source_line_ids", "source", "translation", "role", "box", "status", "action")
         missing = [name for name in required if name not in block]
         if missing:
@@ -225,6 +289,8 @@ def validate_manifest(manifest: dict) -> dict:
             raise ManifestError(f"block {block_id} must have a four-value box")
         if block["action"] not in {"replace", "preserve", "add_bilingual"}:
             raise ManifestError(f"block {block_id} has invalid action {block['action']!r}")
+        if 'preserve_colored_ink' in block and not isinstance(block['preserve_colored_ink'], bool):
+            raise ManifestError(f"block {block_id} preserve_colored_ink must be boolean")
         if block["action"] == "replace":
             has_single = "clean_box" in block
             has_multiple = "clean_boxes" in block
@@ -357,6 +423,12 @@ def validate_manifest(manifest: dict) -> dict:
     if failures:
         raise ManifestError("; ".join(failures))
 
+    from scan_pagination import validate_pagination
+    try:
+        validate_pagination(manifest)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ManifestError(f"invalid pagination: {exc}") from exc
+
     return {
         "source_line_count": len(source_ids),
         "assigned_line_count": len(assignments),
@@ -369,11 +441,19 @@ def _wrap_paragraph(text: str, font_name: str, font_size: float, width: float) -
     if any("\u3400" <= character <= "\u9fff" for character in text):
         lines: list[str] = []
         current = ""
-        for character in text:
-            candidate = current + character
+        # Chinese may wrap between characters; names, decimals, units and model
+        # identifiers embedded in it remain complete tokens, just as in the
+        # non-CJK branch. A narrow frame must be repaired instead of splitting
+        # an engineering value such as +463.00 into two different-looking values.
+        word = r"[^\W_\u3400-\u9fff]"
+        tokens = re.findall(rf"[+\-−±]?{word}+(?:[.,/_'’+\-−–~～]{word}+)*(?:[°%‰℃]+{word}*)?|\s+|.", text)
+        for token in tokens:
+            if not token.isspace() and stringWidth(token, font_name, font_size) > width:
+                raise TextOverflowError(f"unbreakable token exceeds width: {token!r}")
+            candidate = current + token
             if current and stringWidth(candidate, font_name, font_size) > width:
                 lines.append(current.rstrip())
-                current = character.lstrip()
+                current = token.lstrip()
             else:
                 current = candidate
         if current:

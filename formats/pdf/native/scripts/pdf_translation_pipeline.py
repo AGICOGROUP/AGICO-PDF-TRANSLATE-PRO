@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 from collections import Counter
@@ -25,6 +26,10 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ContentStream, NameObject
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from glossary_lookup import parse_glossary, page_terms
 
 
 SCHEMA_VERSION = 2
@@ -142,6 +147,13 @@ def character_record(char: dict[str, Any]) -> dict[str, Any]:
         ],
         "font": font,
         "size": round(float(char.get("size", 0)), 3),
+        **({"baseline": round(float(char["top"]) + float(char["y1"])
+                              - float(char["matrix"][5]), 3)}
+           if isinstance(char.get("matrix"), (list, tuple))
+           and len(char["matrix"]) == 6 and "y1" in char and "top" in char
+           and all(isinstance(value, (int, float)) and math.isfinite(value) for value in char["matrix"])
+           and abs(char["matrix"][1]) < 0.001 and abs(char["matrix"][2]) < 0.001
+           and char["matrix"][0] > 0 and char["matrix"][3] > 0 else {}),
         "color_rgb": rgb,
         "bold": "bold" in font.lower(),
         "italic": any(token in font.lower() for token in ("italic", "oblique")),
@@ -665,6 +677,22 @@ def semantic_heading_level(source: str) -> int | None:
 def source_font_is_bold(block: dict[str, Any]) -> bool:
     if "source_bold_override" in block:
         return bool(block["source_bold_override"])
+    weighted_runs = [
+        (run, len(re.sub(r"\s+", "", str(run.get("text", "")))))
+        for run in block.get("runs", [])
+    ]
+    total = sum(weight for _, weight in weighted_runs)
+    if total:
+        bold_weight = sum(
+            weight for run, weight in weighted_runs
+            if bool(run.get("bold")) or any(
+                token in str(run.get("font", "")).casefold()
+                for token in ("bold", "black", "heavy", "simhei", "heiti", "黑体")
+            )
+        )
+        # One emphasized number or label does not define the whole paragraph's
+        # weight. Keep all source runs for local emphasis evidence.
+        return bold_weight / total >= 0.8
     font_names = [str(block.get("style", {}).get("font", ""))]
     font_names.extend(str(run.get("font", "")) for run in block.get("runs", []))
     joined = " ".join(font_names).casefold()
@@ -673,6 +701,14 @@ def source_font_is_bold(block: dict[str, Any]) -> bool:
         token in joined
         for token in ("bold", "black", "heavy", "simhei", "heiti", "黑体")
     )
+
+
+def source_block_is_footer(block: dict[str, Any], page_height: float) -> bool:
+    top, bottom = float(block["bbox"][1]), float(block["bbox"][3])
+    size = float(block.get("style", {}).get("size", 9))
+    # A body paragraph can reach the bottom margin while starting far above it.
+    # Only compact blocks actually starting in the footer zone qualify.
+    return top >= page_height - 55 and bottom - top <= max(30.0, size * 2.5)
 
 
 def classify_document_roles(pages: list[dict[str, Any]]) -> None:
@@ -686,7 +722,7 @@ def classify_document_roles(pages: list[dict[str, Any]]) -> None:
             source = str(block.get("source_text", "")).strip()
             if (
                 top < 60
-                or bottom > page_height - 70
+                or source_block_is_footer(block, page_height)
                 or any(point_in_box(center, cell["bbox"]) for cell in table_cells)
                 or source_font_is_bold(block)
                 or semantic_heading_level(source) is not None
@@ -725,14 +761,15 @@ def classify_document_roles(pages: list[dict[str, Any]]) -> None:
                 role = f"table-{size_bucket:g}"
             elif top < 60:
                 role = "running-header"
-            elif bottom > page_height - 70:
+            elif source_block_is_footer(block, page_height):
                 role = "footer"
             elif semantic_level is not None:
                 role = f"heading-{semantic_level}-{size_bucket:g}"
                 block["source_bold_override"] = True
             elif (
-                source_bold
-                or (size >= document_body_size * 1.25 and len(source) <= 80)
+                len(source) <= 80
+                and not re.match(r"^\s*[•·‣◦●▪\-–—]\s*", source)
+                and (source_bold or size >= document_body_size * 1.25)
             ):
                 level = 1 if size >= document_body_size * 1.5 else 2
                 role = f"heading-{level}-{size_bucket:g}"
@@ -937,28 +974,43 @@ def manifest_blocks(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def apply_translation_records(manifest: dict, payload: dict, records: list, allow_cjk: bool) -> int:
+    """Validate a complete submitted batch before changing any target block."""
+    if payload.get("source_sha256") != manifest.get("source_sha256"):
+        die("Translation packet source hash does not match manifest.")
+    for key in ("source_language", "target_language"):
+        if payload.get(key) is not None and payload[key] != manifest.get(key):
+            die(f"Translation packet {key} differs from manifest.")
+    destination = manifest_blocks(manifest)
+    code = str(manifest.get("target_language", "")).casefold().replace("_", "-").split("-")[0]
+    changes = {}
+    for record in records:
+        block_id = record.get("id")
+        if block_id not in destination:
+            die(f"Unknown block ID: {block_id}")
+        if block_id in changes:
+            die(f"Duplicate translation block ID: {block_id}")
+        if destination[block_id]["source_text"] != record.get("source_text"):
+            die(f"Source text changed for block: {block_id}")
+        if not isinstance(record.get("translation"), str):
+            die(f"Translation must be text for block: {block_id}")
+        translation = normalize_text(record["translation"])
+        if not translation:
+            die(f"Blank translation for block: {block_id}")
+        if cjk_count(translation) and code not in {"zh", "ja"} and not allow_cjk:
+            die(f"Unexpected CJK residue in translation: {block_id}")
+        changes[block_id] = translation
+    for block_id, translation in changes.items():
+        destination[block_id]["translation"] = translation
+    return len(changes)
+
+
 def merge_command(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest)
     manifest = read_json(manifest_path)
     batch = read_json(Path(args.batch))
-    if manifest["source_sha256"] != batch.get("source_sha256"):
-        die("Batch source hash does not match manifest.")
-    destination = manifest_blocks(manifest)
-    merged = 0
-    for page in batch.get("pages", []):
-        for block in page.get("blocks", []):
-            block_id = block.get("id")
-            if block_id not in destination:
-                die(f"Unknown block ID: {block_id}")
-            if destination[block_id]["source_text"] != block.get("source_text"):
-                die(f"Source text changed for block: {block_id}")
-            translation = normalize_text(str(block.get("translation", "")))
-            if not translation:
-                die(f"Blank translation for block: {block_id}")
-            if cjk_count(translation) and not args.allow_cjk:
-                die(f"Unexpected CJK residue in translation: {block_id}")
-            destination[block_id]["translation"] = translation
-            merged += 1
+    records = [block for page in batch.get("pages", []) for block in page.get("blocks", [])]
+    merged = apply_translation_records(manifest, batch, records, args.allow_cjk)
     write_json(manifest_path, manifest)
     print(json.dumps({"merged_blocks": merged}, ensure_ascii=False))
 
@@ -981,8 +1033,14 @@ def status_command(args: argparse.Namespace) -> None:
 def export_translation_command(args: argparse.Namespace) -> None:
     manifest = read_json(Path(args.manifest))
     records: list[dict[str, Any]] = []
+    pages = []
+    terms, _ = parse_glossary(Path(__file__).resolve().parents[1] / "references/cement-terminology.md")
     for page in manifest["pages"]:
         blocks = page.get("blocks", [])
+        context = "\n".join(block["source_text"] for block in blocks)
+        pages.append({"page": page["page"],
+                      "ordered_source_ids": [b["id"] for b in blocks],
+                      "terminology": page_terms(context, terms, manifest.get("source_language"))})
         for index, block in enumerate(blocks):
             records.append(
                 {
@@ -991,14 +1049,15 @@ def export_translation_command(args: argparse.Namespace) -> None:
                     "source_text": block["source_text"],
                     "translation": block.get("translation", ""),
                     "role": block.get("role", ""),
-                    "context_before": blocks[index - 1]["source_text"] if index else "",
-                    "context_after": blocks[index + 1]["source_text"] if index + 1 < len(blocks) else "",
                     "protected_tokens": block.get("protected_tokens", []),
                 }
             )
     write_json(
         Path(args.output),
-        {"source_sha256": manifest["source_sha256"], "records": records},
+        {"source_sha256": manifest["source_sha256"],
+         "source_language": manifest.get("source_language"),
+         "target_language": manifest.get("target_language"),
+         "pages": pages, "records": records},
     )
     print(json.dumps({"records": len(records), "output": str(Path(args.output).resolve())}, ensure_ascii=False))
 
@@ -1007,23 +1066,7 @@ def merge_translation_command(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest)
     manifest = read_json(manifest_path)
     packet = read_json(Path(args.packet))
-    if packet.get("source_sha256") != manifest.get("source_sha256"):
-        die("Translation packet source hash does not match manifest.")
-    destination = manifest_blocks(manifest)
-    merged = 0
-    for record in packet.get("records", []):
-        block_id = record.get("id")
-        if block_id not in destination:
-            die(f"Unknown block ID: {block_id}")
-        if destination[block_id]["source_text"] != record.get("source_text"):
-            die(f"Source text changed for block: {block_id}")
-        translation = normalize_text(str(record.get("translation", "")))
-        if not translation:
-            die(f"Blank translation for block: {block_id}")
-        if cjk_count(translation) and not args.allow_cjk:
-            die(f"Unexpected CJK residue in translation: {block_id}")
-        destination[block_id]["translation"] = translation
-        merged += 1
+    merged = apply_translation_records(manifest, packet, packet.get("records", []), args.allow_cjk)
     write_json(manifest_path, manifest)
     print(json.dumps({"merged_blocks": merged}, ensure_ascii=False))
 
@@ -1043,7 +1086,7 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
             die("Manifest page count does not match the source PDF.")
         for page_info, page in zip(manifest["pages"], document.pages):
             detected_table_cells = page_table_cells(page)
-            table_cells = detected_table_cells or page_info.get("table_cells", [])
+            table_cells = page_info.get("reviewed_table_cells") or detected_table_cells or page_info.get("table_cells", [])
             page_info["table_cells"] = table_cells
             page_info["image_boxes"] = page_image_boxes(page)
             raw_lines = page.extract_text_lines(strip=True, return_chars=True) or []
@@ -1062,6 +1105,14 @@ def enrich_manifest_layout(source: Path, manifest: dict[str, Any]) -> None:
                                 (b["bbox"][3] - b["bbox"][1]))
                     owners[id(char)] = owner["id"]
             for block in page_info["blocks"]:
+                block["source_link_uris"] = [
+                    link["uri"] for link in page.hyperlinks
+                    if link.get("uri")
+                    and float(link["top"]) < float(block["bbox"][3])
+                    and float(link["bottom"]) > float(block["bbox"][1])
+                    and float(link["x0"]) < float(block["bbox"][2])
+                    and float(link["x1"]) > float(block["bbox"][0])
+                ]
                 selected_raw = [
                     char
                     for char in page.chars
@@ -1160,6 +1211,11 @@ def locate_pdftoppm() -> str:
 def font_file(style: dict[str, Any]) -> str:
     candidates: list[str] = []
     windows = os.environ.get("WINDIR", r"C:\Windows")
+    if style.get("unicode_fallback"):
+        unicode_path = os.path.join(windows, "Fonts", "ARIALUNI.ttf")
+        if os.path.isfile(unicode_path):
+            return unicode_path
+        die("The selected Unicode render font is unavailable.")
     if style.get("cjk"):
         if style.get("bold"):
             # SimHei has a complete CJK bold glyph set on Windows. Some

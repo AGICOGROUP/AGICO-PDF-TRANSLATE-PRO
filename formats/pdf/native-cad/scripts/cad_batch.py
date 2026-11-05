@@ -21,7 +21,7 @@ def save_json(path, value):
     temporary.replace(path)
 
 
-def cell_proposals(page, records):
+def cell_proposals(page, records, *, min_rule_length=None):
     horizontal, vertical = [], []
     for path in page.get_drawings():
         for item in path['items']:
@@ -33,9 +33,9 @@ def cell_proposals(page, records):
                 segments = [(rect.tl, rect.tr), (rect.tr, rect.br),
                             (rect.br, rect.bl), (rect.bl, rect.tl)]
             for a, b in segments:
-                if abs(a.y-b.y) < .15 and abs(a.x-b.x) > 20:
+                if abs(a.y-b.y) < .15 and abs(a.x-b.x) > (20 if min_rule_length is None else min_rule_length):
                     horizontal.append((a.y, min(a.x,b.x), max(a.x,b.x)))
-                if abs(a.x-b.x) < .15 and abs(a.y-b.y) > 12:
+                if abs(a.x-b.x) < .15 and abs(a.y-b.y) > (12 if min_rule_length is None else min_rule_length):
                     vertical.append((a.x, min(a.y,b.y), max(a.y,b.y)))
     result = {}
     for record in records:

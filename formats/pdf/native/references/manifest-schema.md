@@ -10,7 +10,8 @@ Each block contains:
 - `source_text`: visible source text
 - `translation`: model-produced target text
 - `characters`: per-character text, bounding box, font, size, color, and
-  translatable/protected flags
+  translatable/protected flags; optional `baseline` in top-down page coordinates
+  is extracted only from a valid horizontal source text matrix
 - `runs`: contiguous mixed-style spans
 - `lines`: line boxes, characters, runs, and table-cell segments
 - `role`: document-level typography role
@@ -19,6 +20,8 @@ Each block contains:
   count. Keep this source-derived binding unchanged during translation.
 - `style`: source font, source size, role size, color, weight, alignment, and
   rotation
+- `source_link_uris`: source-derived hyperlink URIs intersecting the block,
+  refreshed during native layout enrichment; do not edit these to force placement
 - optional `source_bold_override`: reviewed source-render evidence used only
   when the PDF font metadata does not expose the visible weight
 - optional `render_translation_override`: meaning-preserving concise wording

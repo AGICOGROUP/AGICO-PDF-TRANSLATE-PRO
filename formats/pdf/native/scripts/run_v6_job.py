@@ -276,6 +276,19 @@ def _validate_image_localization_review(
             raise ValueError(f"missing vector metadata for translated image: {image_id}")
 
 
+def _empty_image_inventory(job_dir: Path, job: dict) -> bool:
+    state.assert_artifacts(job_dir, ('manifest', 'native_pdf', 'image_inventory'))
+    inventory = json.loads(_artifact(job, 'image_inventory').read_text(encoding='utf-8'))
+    if not isinstance(inventory, dict) or not isinstance(inventory.get('images'), list):
+        raise ValueError('image inventory must explicitly contain an images list')
+    source_path = inventory.get('source_path')
+    if (inventory.get('source_sha256') != job['source']['sha256']
+            or not isinstance(source_path, str) or not source_path
+            or Path(source_path).resolve() != Path(job['source']['path']).resolve()):
+        raise ValueError('image inventory source binding differs from the job')
+    return inventory['images'] == []
+
+
 def resume(job_dir: Path) -> tuple[dict[str, Any], int]:
     job = state.load_job(job_dir)
     stage = job["stage"]
@@ -283,7 +296,7 @@ def resume(job_dir: Path) -> tuple[dict[str, Any], int]:
         manifest = _artifact(job, "manifest")
         action = "build_native" if _manifest_complete(manifest) else "translate_manifest"
     elif stage == "native_translated":
-        action = "review_images"
+        action = "assemble" if _empty_image_inventory(job_dir, job) else "review_images"
     elif stage == "images_annotated":
         action = "build_images"
     elif stage == "images_cleaned":
@@ -341,8 +354,10 @@ def annotate_images(job_dir: Path, metadata: Path, review: Path) -> None:
         raise ValueError("annotate-images requires native_translated stage")
     metadata_target = job_dir / "image-vector-metadata.json"
     review_target = job_dir / "image-review.json"
-    shutil.copy2(metadata, metadata_target)
-    shutil.copy2(review, review_target)
+    for supplied, destination in ((metadata, metadata_target), (review, review_target)):
+        if supplied.resolve() != destination.resolve() and not (
+                destination.exists() and supplied.samefile(destination)):
+            shutil.copy2(supplied, destination)
     review_data = json.loads(review_target.read_text(encoding="utf-8"))
     metadata_data = json.loads(metadata_target.read_text(encoding="utf-8"))
     if not review_data.get("complete"):
@@ -418,6 +433,15 @@ def build_images(job_dir: Path) -> None:
 
 def assemble(job_dir: Path) -> None:
     job = state.load_job(job_dir)
+    if job['stage'] == 'native_translated' and _empty_image_inventory(job_dir, job):
+        metadata = job_dir / 'auto-empty-image-metadata.json'
+        review = job_dir / 'auto-empty-image-review.json'
+        metadata.write_text(json.dumps({'images': []}), encoding='utf-8')
+        review.write_text(json.dumps({'complete': True, 'reviewed_image_ids': [],
+                                     'images': [], 'confirm_items': []}), encoding='utf-8')
+        annotate_images(job_dir, metadata, review)
+        build_images(job_dir)
+        job = state.load_job(job_dir)
     if job["stage"] != "images_cleaned":
         raise ValueError("assemble requires images_cleaned stage")
     output = job_dir / "candidate.pdf"

@@ -6,6 +6,9 @@ import json
 import math
 import re
 import subprocess
+import tempfile
+import warnings
+from importlib.metadata import version
 from pathlib import Path
 
 import pdfplumber
@@ -14,17 +17,27 @@ from pypdf import PdfReader
 
 from contracts import ManifestError, validate_manifest
 from audit_scan_inventory import audit_inventory
-from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records
+from extract_scan import _ocr_pass, find_pdftoppm, merge_ocr_records, ocr_runtime_signature
 
 
 CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
-def requires_cjk_residual_gate(target_language: str) -> bool:
-    """CJK is source residue only when the requested output is non-CJK."""
+def requires_cjk_residual_gate(target_language: str, source_language: str = "",
+                               source_lines: list[dict] | None = None) -> bool:
+    """Use source evidence; a non-CJK target alone does not imply Chinese input."""
     language = str(target_language or "").lower().replace("_", "-")
-    return not language.startswith(("zh", "ja", "ko"))
-OFFICIAL_BUILDER = "translate-scan-pdf-professionally"
+    if language.startswith(("zh", "ja", "ko")):
+        return False
+    if any(CJK_RE.search(str(line.get('text', ''))) for line in source_lines or []):
+        return True
+    from ocr_language_guard import LANGUAGE_SCRIPT
+    source = str(source_language or '').lower().replace('_', '-').split('-')[0]
+    script = LANGUAGE_SCRIPT.get(source)
+    # Missing/unknown metadata keeps the legacy conservative inspection. Known
+    # Chinese/Japanese sources still require it even if OCR missed their script.
+    return script is None or script == 'CJK'
+OFFICIAL_BUILDER = "PDF-TRANSLATE-PRO-SCAN"
 
 
 def sha256_file(path: Path) -> str:
@@ -170,6 +183,7 @@ def evaluate_evidence(
     font_embedding_failures: list[str] | None = None,
     automated_overlap_failures: list[dict] | None = None,
     candidate_sha256: str | None = None,
+    extracted_by_output: dict[int, str] | None = None,
 ) -> dict:
     try:
         coverage = validate_manifest(manifest)
@@ -185,8 +199,30 @@ def evaluate_evidence(
     missing_translation_blocks = [
         block["id"]
         for block in required_blocks
+        if not block.get('segments')
         if not _translation_present(block, extracted_by_page.get(block["page"], ""))
     ]
+    from scan_pagination import output_page_plan
+    page_plan = output_page_plan(manifest)
+    output_indices = {(row['source_page'], row['continuation_index']): row['output_page'] for row in page_plan}
+    for block in required_blocks:
+        for segment in block.get('segments', []):
+            physical = output_indices.get((block['page'], segment['continuation_index']))
+            if not _translation_present({**block, 'translation': segment['translation']},
+                                        (extracted_by_output or {}).get(physical, '')):
+                missing_translation_blocks.append(f"{block['id']} continuation {segment['continuation_index']}")
+    pagination_errors = []
+    if manifest.get('pagination') and build_report.get('output_page_mapping') != page_plan:
+        pagination_errors.append('build output-page mapping differs from the manifest ownership plan')
+    if manifest.get('pagination') and not build_report.get('pagination_overflow_evidence'):
+        pagination_errors.append('missing measured readable-font overflow evidence')
+    if manifest.get('pagination'):
+        expected_segments = {(b['id'], index) for b in required_blocks
+                             for index, _ in enumerate(b.get('segments', []))}
+        actual_segments = [(r['id'], r['segment_index']) for r in build_report.get('rendered_blocks', [])
+                           if 'segment_index' in r]
+        if set(actual_segments) != expected_segments or len(actual_segments) != len(expected_segments):
+            pagination_errors.append('each logical translation segment must be rendered exactly once')
     rendered_ids = {record["id"] for record in build_report.get("rendered_blocks", [])}
     for page in build_report.get("pages", []):
         rendered_ids.update(page.get("rendered_block_ids", []))
@@ -288,7 +324,8 @@ def evaluate_evidence(
         "unexpected_source_language": len(residual_cjk),
         "residual_cjk": residual_cjk,
         "output_page_count": output_page_count,
-        "expected_output_page_count": len(manifest.get("selected_pages", [])),
+        "expected_output_page_count": len(page_plan),
+        "pagination_errors": pagination_errors,
         "page_geometry_match": geometry_match,
         "outside_approved_pixel_changes": int(
             build_report.get("outside_approved_pixel_changes", -1)
@@ -318,9 +355,12 @@ def evaluate_evidence(
     if dismissed_overlaps:
         report['warnings']['reviewed_overlap_false_positives'] = dismissed_overlaps
     report["unreadable_text_failures"] = visual_review.get("unreadable_text_failures", [])
+    report['delivery_ready'] = build_report.get('delivery_ready', True)
+    report['size_evidence'] = build_report.get('size_evidence', {})
     report["passed"] = all(
         [
             not report["manifest_error"],
+            not report['pagination_errors'],
             report["source_line_count"] == report["assigned_line_count"],
             not report["missing_rendered_blocks"],
             not report["missing_translation_blocks"],
@@ -341,6 +381,7 @@ def evaluate_evidence(
             not report["orientation_mismatch_failures"],
             not report["unassigned_source_lines"],
             report["official_pipeline"],
+            report['delivery_ready'],
         ]
     )
     return report
@@ -402,9 +443,76 @@ def rendered_orientation_mismatches(chars: list[dict], blocks: list[dict], geome
 def extract_output_text(
     pdf_path: Path,
     source_pages: list[int],
+    ignore_overlap_regions=None,
+    manifest: dict | None = None,
+    orientation_failures: list[dict] | None = None,
+    extracted_by_output: dict[int, str] | None = None,
+) -> tuple[dict[int, str], list[dict]]:
+    """Read actual PDF glyphs; suspicious evidence retains the legacy parser."""
+    try:
+        import pymupdf
+        from scan_pagination import blocks_for_output, output_page_plan
+        logical, physical, directions = {}, {}, []
+        plan = output_page_plan(manifest) if manifest and manifest.get('pagination') else None
+        with pymupdf.open(pdf_path) as document:
+            if len(document) != len(source_pages):
+                raise ValueError('output page mapping mismatch')
+            for index, page in enumerate(document):
+                source_page = source_pages[index]
+                chars, fragments = [], []
+                for item in page.get_text('rawdict')['blocks']:
+                    for line in item.get('lines', []):
+                        dx, dy = line['dir']
+                        if min(abs(math.atan2(dy, dx) / (math.pi / 2) - round(
+                                math.atan2(dy, dx) / (math.pi / 2))), 1) > 1e-4:
+                            raise ValueError('unsupported glyph direction')
+                        for span in line['spans']:
+                            for char in span['chars']:
+                                text = char['c']
+                                if any(c == '\ufffd' or 0xD800 <= ord(c) <= 0xDFFF
+                                       or (ord(c) < 32 and not c.isspace()) for c in text):
+                                    raise ValueError('unknown PDF glyph')
+                                x0, y0, x1, y1 = char['bbox']
+                                chars.append(dict(text=text, x0=x0, x1=x1, top=y0, bottom=y1,
+                                                  matrix=(dx, -dy, dy, dx, 0, 0)))
+                            fragments.append(''.join(c['c'] for c in span['chars']))
+                text = page.get_text('text') + '\n' + '\n'.join(fragments)
+                if manifest:
+                    geometry = next(p for p in manifest['pages'] if p['source_page'] == source_page)
+                    blocks = (blocks_for_output(manifest, source_page, plan[index]['continuation_index'])
+                              if plan else [b for b in manifest['blocks'] if b['page'] == source_page])
+                    directions.extend(rendered_orientation_mismatches(chars, blocks, geometry))
+                    for block in blocks:
+                        if block.get('action') in {'replace', 'add_bilingual'} and not _translation_present(block, text):
+                            raise ValueError('expected translation absent from PDF glyphs')
+                words = [dict(x0=w[0], top=w[1], x1=w[2], bottom=w[3], text=w[4])
+                         for w in page.get_text('words')]
+                # A different parser has different word boxes. Keep legacy exact-pair
+                # review semantics whenever there is any geometric suspicion.
+                for offset, first in enumerate(words):
+                    if any(words_materially_overlap(first, second) for second in words[offset + 1:]):
+                        raise ValueError('possible word overlap')
+                physical[index + 1] = text
+                logical[source_page] = logical[source_page] + '\n' + text if source_page in logical else text
+        if directions:
+            raise ValueError('actual glyph direction mismatch')
+    except Exception:
+        return _extract_output_text_legacy(
+            pdf_path, source_pages, ignore_overlap_regions=ignore_overlap_regions,
+            manifest=manifest, orientation_failures=orientation_failures,
+            extracted_by_output=extracted_by_output)
+    if extracted_by_output is not None:
+        extracted_by_output.update(physical)
+    return logical, []
+
+
+def _extract_output_text_legacy(
+    pdf_path: Path,
+    source_pages: list[int],
     ignore_overlap_regions: dict[int, list[tuple[float, float, float, float]]] | None = None,
     manifest: dict | None = None,
     orientation_failures: list[dict] | None = None,
+    extracted_by_output: dict[int, str] | None = None,
 ) -> tuple[dict[int, str], list[dict]]:
     extracted_by_page: dict[int, str] = {}
     overlap_failures: list[dict] = []
@@ -415,11 +523,20 @@ def extract_output_text(
             source_page = source_pages[index]
             if manifest is not None and orientation_failures is not None:
                 geometry = next(p for p in manifest['pages'] if p['source_page'] == source_page)
-                blocks = [b for b in manifest['blocks'] if b['page'] == source_page]
+                if manifest.get('pagination'):
+                    from scan_pagination import blocks_for_output, output_page_plan
+                    mapping = output_page_plan(manifest)[index]
+                    blocks = blocks_for_output(manifest, source_page, mapping['continuation_index'])
+                else:
+                    blocks = [b for b in manifest['blocks'] if b['page'] == source_page]
                 orientation_failures.extend(rendered_orientation_mismatches(page.chars, blocks, geometry))
             visual_text = page.extract_text() or ""
             logical_text = logical_reader.pages[index].extract_text() or ""
-            extracted_by_page[source_page] = visual_text + "\n" + logical_text
+            combined = visual_text + "\n" + logical_text
+            extracted_by_page[source_page] = (extracted_by_page[source_page] + '\n' + combined
+                                              if source_page in extracted_by_page else combined)
+            if extracted_by_output is not None:
+                extracted_by_output[index+1] = combined
             words = page.extract_words(use_text_flow=True, keep_blank_chars=False)
             for first_index, first in enumerate(words):
                 if _word_in_regions(first, ignored.get(source_page, [])):
@@ -443,10 +560,13 @@ def extract_output_text(
 
 
 def compare_geometry(manifest: dict, reader: PdfReader) -> bool:
-    if len(reader.pages) != len(manifest["selected_pages"]):
+    from scan_pagination import output_page_plan
+    plan = output_page_plan(manifest)
+    if len(reader.pages) != len(plan):
         return False
     source_pages = {page["source_page"]: page for page in manifest["pages"]}
-    for index, source_page_number in enumerate(manifest["selected_pages"]):
+    for index, row in enumerate(plan):
+        source_page_number = row['source_page']
         expected = source_pages[source_page_number]
         actual = reader.pages[index]
         if abs(float(actual.mediabox.width) - expected["width_pt"]) > 0.02:
@@ -475,17 +595,58 @@ def inspect_font_embedding(reader: PdfReader) -> list[str]:
 
 def residual_cjk_ocr(pdf_path: Path, output_dir: Path, source_pages: list[int]) -> list[dict]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    prefix = output_dir / "page"
+    render_dir = output_dir / ('render-' + sha256_file(pdf_path)[:16])
+    render_dir.mkdir(exist_ok=True)
+    prefix = render_dir / "page"
     command = [find_pdftoppm(), "-r", "200", "-png", str(pdf_path), str(prefix)]
     subprocess.run(command, check=True, capture_output=True)
-    from rapidocr_onnxruntime import RapidOCR
-
-    engine = RapidOCR()
+    images = sorted(render_dir.glob('page-*.png'),
+                    key=lambda path: int(path.stem.rsplit('-', 1)[1]))
+    if len(images) != len(source_pages):
+        raise ValueError('Residual OCR render page count does not match source mapping')
+    runtime = {'models': ocr_runtime_signature(),
+               'rapidocr': version('rapidocr-onnxruntime'), 'onnxruntime': version('onnxruntime'),
+               'verify_code': sha256_file(Path(__file__)),
+               'ocr_code': sha256_file(Path(__file__).with_name('extract_scan.py'))}
+    checkpoints = output_dir / 'ocr-checkpoints'
+    checkpoints.mkdir(exist_ok=True)
+    engine = None
     residual = []
-    for index, image_path in enumerate(sorted(output_dir.glob("page-*.png"))):
+    for index, image_path in enumerate(images):
+        identity = {'render_sha256': sha256_file(image_path), 'source_page': source_pages[index],
+                    'runtime': runtime, 'dpi': 200, 'scales': [1.0, 2.0]}
+        checkpoint = checkpoints / f'page-{index+1:04d}.json'
+        records = None
+        try:
+            cached = json.loads(checkpoint.read_text(encoding='utf-8'))
+            payload = json.dumps(cached['records'], sort_keys=True, ensure_ascii=False, allow_nan=False)
+            if (cached.get('identity') == identity and isinstance(cached['records'], list)
+                    and cached.get('records_sha256') == hashlib.sha256(payload.encode('utf-8')).hexdigest()):
+                records = cached['records']
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         with Image.open(image_path) as loaded:
             image = loaded.convert("RGB")
-        records = merge_ocr_records(_ocr_pass(engine, image, 1.0) + _ocr_pass(engine, image, 2.0))
+        if records is None:
+            if engine is None:
+                from extract_scan import create_ocr_engine
+                engine = create_ocr_engine()
+            records = merge_ocr_records(_ocr_pass(engine, image, 1.0) + _ocr_pass(engine, image, 2.0))
+            payload = json.dumps(records, sort_keys=True, ensure_ascii=False, allow_nan=False)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=checkpoints,
+                                                  prefix='.qa-ocr-', suffix='.tmp', delete=False) as stream:
+                    temporary = Path(stream.name)
+                    json.dump({'identity': identity, 'records': records,
+                               'records_sha256': hashlib.sha256(payload.encode('utf-8')).hexdigest()},
+                              stream, ensure_ascii=False, allow_nan=False)
+                temporary.replace(checkpoint)
+            except OSError as error:
+                warnings.warn(f'Residual OCR checkpoint not saved: {error}', RuntimeWarning)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
         for record in records:
             if CJK_RE.search(record["text"]):
                 residual.append(
@@ -499,6 +660,7 @@ def residual_cjk_ocr(pdf_path: Path, output_dir: Path, source_pages: list[int]) 
                         "page_pixel_height": image.height,
                     }
                 )
+        image.close()
     return residual
 
 
@@ -567,6 +729,10 @@ def validate_translation_review(review: dict | None, manifest: dict, source_hash
                         intersections += max(0, min(c[2],b[2])-max(c[0],b[0])) * max(0, min(c[3],b[3])-max(c[1],b[1]))
                     if intersections / area < .5:
                         errors.append(f"page {page}: candidate {cid} source lines do not cover its location")
+            elif disposition == 'preserved_ink':
+                from protected_source_ink import protection_note_errors
+                errors.extend(f'page {page}: candidate {cid}: {message}'
+                              for message in protection_note_errors(note))
             elif disposition == 'illegible':
                 attempts = note.get('attempts')
                 if not isinstance(attempts, list) or len(attempts) != 2 or not all(isinstance(a, str) and a.strip() for a in attempts):
@@ -576,6 +742,15 @@ def validate_translation_review(review: dict | None, manifest: dict, source_hash
         no_text_reason = entry.get("no_readable_text")
         if not expected_ids and (not isinstance(no_text_reason, str) or not no_text_reason.strip()):
             errors.append(f"page {page}: missing source-based no-readable-text reason")
+    if manifest.get('pagination'):
+        from scan_pagination import output_page_plan
+        plan = output_page_plan(manifest)
+        evidence = review.get('pagination_review', {})
+        if (evidence.get('output_page_mapping') != plan
+                or evidence.get('reviewed_output_pages') != list(range(1, len(plan)+1))
+                or not all(evidence.get(key) is True for key in
+                    ('content_order_checked', 'running_numbers_and_references_checked', 'format_and_artwork_checked'))):
+            errors.append('missing candidate-bound continuation content/order/format/page-reference review')
     return errors
 
 
@@ -610,23 +785,36 @@ def main() -> None:
     # ownership of recognized lines cannot certify that OCR found every line.
     audited_manifest, unregistered_candidates = audit_inventory(manifest)
     semantic_errors = validate_translation_review(translation_review, audited_manifest, source_hash, output_hash)
+    from scan_pagination import output_page_plan
+    page_plan = output_page_plan(manifest)
+    output_sources = [row['source_page'] for row in page_plan]
+    from protected_source_ink import validate_protected_ink
+    semantic_errors.extend(validate_protected_ink(
+        translation_review, audited_manifest, source, pdf_path,
+        Path(args.report).parent / 'protected-ink-render',
+        output_page_map={row['output_page']: row['source_page'] for row in page_plan}))
     if str(visual_review.get("candidate_sha256", "")).lower() != output_hash.lower():
         raise ValueError("visual review is not bound to the candidate PDF SHA-256")
     reader = PdfReader(str(pdf_path))
     rendered_orientation_failures = []
+    extracted_by_output = {}
     extracted, automated_overlap = extract_output_text(
         pdf_path,
-        manifest["selected_pages"],
+        output_sources,
         ignore_overlap_regions={},
         manifest=manifest,
         orientation_failures=rendered_orientation_failures,
+        extracted_by_output=extracted_by_output,
     )
     residual = []
-    if requires_cjk_residual_gate(manifest.get("target_language", "")):
+    cjk_check_required = requires_cjk_residual_gate(
+        manifest.get("target_language", ""), manifest.get('source_language', ''),
+        manifest.get('source_lines', []))
+    if cjk_check_required:
         residual = residual_cjk_ocr(
             pdf_path,
             Path(args.report).resolve().parent / "qa-ocr-render",
-            manifest["selected_pages"],
+            output_sources,
         )
     residual = filter_approved_bilingual_residuals(residual, manifest)
     reviewed_false_positives = visual_review.get("reviewed_ocr_false_positives", [])
@@ -644,6 +832,7 @@ def main() -> None:
         font_embedding_failures=inspect_font_embedding(reader),
         automated_overlap_failures=automated_overlap,
         candidate_sha256=output_hash,
+        extracted_by_output=extracted_by_output,
     )
     report.update(
         {
@@ -653,6 +842,11 @@ def main() -> None:
             "output": str(pdf_path),
             "output_sha256": output_hash,
             "selected_source_pages": manifest["selected_pages"],
+            "source_language": manifest.get('source_language'),
+            "cjk_residual_check": {
+                "performed": cjk_check_required,
+                "scope": "CJK residue only; other source-language omissions require semantic/visual review",
+            },
             "reviewed_ocr_false_positives": matched_false_positives,
             "unmatched_reviewed_ocr_false_positives": [
                 item for item in reviewed_false_positives if item not in matched_false_positives
@@ -660,10 +854,13 @@ def main() -> None:
         }
     )
     report["translation_review_errors"] = semantic_errors
+    if manifest.get('pagination'):
+        from scan_pagination import verify_page_numbers
+        report['pagination_errors'].extend(verify_page_numbers(manifest, pdf_path))
     report['unregistered_inventory_candidates'] = unregistered_candidates
     if report['unmatched_reviewed_ocr_false_positives']:
         report['warnings']['unmatched_reviewed_ocr_false_positives'] = report['unmatched_reviewed_ocr_false_positives']
-    report["passed"] = (report["passed"] and not semantic_errors
+    report["passed"] = (report["passed"] and not semantic_errors and not report.get('pagination_errors')
                         and not rendered_orientation_failures and not unregistered_candidates)
     output = Path(args.report)
     output.parent.mkdir(parents=True, exist_ok=True)

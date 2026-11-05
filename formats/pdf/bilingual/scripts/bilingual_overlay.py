@@ -55,16 +55,21 @@ def text_width(text: str, fontfile: str, fontsize: float) -> float:
 def wrap_cjk(text: str, fontfile: str, fontsize: float, max_width: float) -> list[str]:
     """Wrap text to fit within max_width, character by character.
 
-    Works for CJK text where any character can be a break point. For
-    mixed Latin/CJK, breaks at the last character that still fits.
+    CJK may break between characters. Prefer an available space for Latin
+    words; only an individual word wider than the container splits.
     """
     lines: list[str] = []
     current = ""
     for ch in text:
         candidate = current + ch
         if text_width(candidate, fontfile, fontsize) > max_width and current:
-            lines.append(current)
-            current = ch
+            break_at = current.rfind(" ")
+            if break_at > 0:
+                lines.append(current[:break_at].rstrip())
+                current = (current[break_at + 1:] + ch).lstrip()
+            else:
+                lines.append(current.rstrip())
+                current = ch.lstrip()
         else:
             current = candidate
     if current:
@@ -225,7 +230,7 @@ def main() -> int:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     build_report = {
-        "builder": "translate-pdf-bilingual-overlay",
+        "builder": "PDF-TRANSLATE-PRO-BILINGUAL",
         "source_sha256": digest(args.source),
         "translations_sha256": digest(args.translations),
         "output_sha256": digest(args.output),

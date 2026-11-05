@@ -9,12 +9,42 @@ import re
 import sys
 import math
 import time
+import importlib
+import threading
+import os
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from pypdf import PdfReader
+
+_OCR_INITIALIZATION_LOCK = threading.Lock()
+
+
+def create_ocr_engine(rec_model: str | Path | None = None):
+    """Bound ONNX pools during construction, including RapidOCR versions that
+    silently ignore thread-count keyword arguments. Restore the library hook
+    before returning; detection models and thresholds stay unchanged.
+    """
+    package = importlib.import_module('rapidocr_onnxruntime')
+    runtime = importlib.import_module('rapidocr_onnxruntime.utils')
+    if not hasattr(runtime, 'SessionOptions'):
+        runtime = importlib.import_module('rapidocr_onnxruntime.utils.infer_engine')
+    with _OCR_INITIALIZATION_LOCK:
+        original = runtime.SessionOptions
+        def options():
+            value = original()
+            value.intra_op_num_threads = min(8, os.cpu_count() or 1)
+            value.inter_op_num_threads = 1
+            value.add_session_config_entry('session.intra_op.allow_spinning', '0')
+            value.add_session_config_entry('session.inter_op.allow_spinning', '0')
+            return value
+        runtime.SessionOptions = options
+        try:
+            return package.RapidOCR(rec_model_path=str(Path(rec_model).resolve())) if rec_model else package.RapidOCR()
+        finally:
+            runtime.SessionOptions = original
 
 
 def sha256_file(path: Path) -> str:
@@ -23,6 +53,30 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def ocr_runtime_signature(rec_model: str | Path | None = None) -> dict:
+    """Bind checkpoints to the configured OCR assets without loading ONNX."""
+    import rapidocr_onnxruntime
+    import yaml
+    import ocr_language_guard
+
+    root = Path(rapidocr_onnxruntime.__file__).resolve().parent
+    config_path = root / 'config.yaml'
+    config_bytes = config_path.read_bytes()
+    config = yaml.safe_load(config_bytes)
+    models = {}
+    flags = {'Det': 'use_text_det', 'Cls': 'use_angle_cls'}
+    for component in ('Det', 'Cls', 'Rec'):
+        if component in flags and not config.get('Global', {}).get(flags[component], True):
+            continue
+        selected = (Path(rec_model) if component == 'Rec' and rec_model
+                    else root / config[component]['model_path']).resolve()
+        models[component] = {'path': str(selected), 'sha256': sha256_file(selected)}
+    return {'config_path': str(config_path), 'config_sha256': hashlib.sha256(config_bytes).hexdigest(),
+            'models': models, 'language_guard_sha256': sha256_file(Path(ocr_language_guard.__file__)),
+            'thread_policy': {'intra_op_num_threads': min(8, os.cpu_count() or 1),
+                              'inter_op_num_threads': 1, 'allow_spinning': False}}
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -107,7 +161,9 @@ def uncovered_text_candidates(image: Image.Image, covered_boxes: list) -> list[l
             if w < max(100, h * 5) or h > 60:
                 continue
             count = sum(x <= stats[i][0] < x+w and y <= stats[i][1] < y+h for i in keep)
-            box = [round(float(v) / factor, 1) for v in (x, y, x+w, y+h)]
+            box = [round(x / factor, 1), round(y / factor, 1),
+                   min(image.width, round((x+w) / factor, 1)),
+                   min(image.height, round((y+h) / factor, 1))]
             if count >= 10 and not any(candidate_is_covered(box, old) for old in boxes):
                 boxes = [old for old in boxes if not candidate_is_covered(old, box)]
                 boxes.append(box)
@@ -166,6 +222,30 @@ def _ocr_pass(engine, image: Image.Image, scale: float) -> list[dict]:
                        (not value or float(score) < engine.text_score) else {}),
                 }
             )
+    return records
+
+
+def read_oriented_page(engine, image: Image.Image, scale: float, rotation: int) -> list[dict]:
+    """Rotate for recognition only, then return every region in source pixels."""
+    if rotation == 0:
+        return _ocr_pass(engine, image, scale)
+    width, height = image.size
+
+    def original(point):
+        x, y = point
+        if rotation == 90:
+            return [width - y, x]
+        if rotation == 180:
+            return [width - x, height - y]
+        return [y, height - x]
+
+    with image.rotate(rotation, expand=True) as upright:
+        records = _ocr_pass(engine, upright, scale)
+    for record in records:
+        quad = [original(point) for point in record['quad']]
+        record['quad'] = quad
+        record['box'] = _normalize_box(quad, 1.0)
+        record['rotation'] = rotation_from_quad(quad)
     return records
 
 
@@ -268,8 +348,17 @@ def extract_selected_pages(
     expected_sha256: str | None = None,
     resume: bool = True,
     ocr_scales: tuple[float, ...] = (1.0,),
+    rec_model: str | Path | None = None,
+    source_languages: tuple[str, ...] = (),
+    recognition_rotation: int = 0,
 ) -> dict:
     started = time.perf_counter()
+    if recognition_rotation not in (0, 90, 180, 270):
+        raise ValueError("Recognition rotation must be 0, 90, 180 or 270 degrees")
+    if recognition_rotation and not run_ocr:
+        raise ValueError("Recognition rotation requires OCR")
+    if not 1 <= len(ocr_scales) <= 2 or any(not math.isfinite(scale) or scale <= 0 for scale in ocr_scales):
+        raise ValueError('OCR scales must contain one or two finite positive scales')
     source_path = Path(source).resolve()
     output_path = Path(output_dir).resolve()
     output_path.mkdir(parents=True, exist_ok=True)
@@ -295,13 +384,24 @@ def extract_selected_pages(
         ocr_version = version("rapidocr-onnxruntime")
     except PackageNotFoundError:
         ocr_version = "unavailable"
+    if rec_model and (not run_ocr or not source_languages):
+        raise ValueError('--rec-model requires OCR and explicit --languages')
+    if run_ocr and source_languages:
+        from ocr_language_guard import coverage, dictionary, unsupported_languages
+
+        alphabet = dictionary(rec_model) if rec_model else dictionary()
+        blocked = unsupported_languages(list(source_languages), coverage(alphabet))
+        if blocked:
+            raise ValueError(f'OCR language preflight failed: {blocked}')
+    runtime_signature = (ocr_runtime_signature(rec_model) if rec_model else ocr_runtime_signature()) if run_ocr else None
     engine = None
     source_lines = []
     for page_number in pages:
         page_started = time.perf_counter()
         key = {"source": actual_hash, "page": page_number, "dpi": dpi,
                "implementation": implementation, "ocr_version": ocr_version,
-               "scales": list(ocr_scales), "run_ocr": run_ocr}
+               "ocr_runtime": runtime_signature, "scales": list(ocr_scales), "run_ocr": run_ocr,
+               "recognition_rotation": recognition_rotation}
         checkpoint = cache_path / f"page-{page_number:04d}.json"
         cached = None
         if resume and checkpoint.exists():
@@ -353,15 +453,15 @@ def extract_selected_pages(
         lines = []
         if run_ocr:
             if engine is None:
-                from rapidocr_onnxruntime import RapidOCR
-                engine = RapidOCR()
+                engine = create_ocr_engine(rec_model) if rec_model else create_ocr_engine()
                 configure_page_detector(engine)
                 if hasattr(engine, 'text_recognizer'):
                     # An explicit two-scale extraction already spends both attempts.
                     engine._angle_retry_allowed = len(ocr_scales) == 1
             with Image.open(page_record["render_path"]) as loaded:
                 image = loaded.convert("RGB")
-            raw = [record for scale in ocr_scales for record in _ocr_pass(engine, image, scale)]
+            raw = [record for scale in ocr_scales
+                   for record in read_oriented_page(engine, image, scale, recognition_rotation)]
             merged = merge_ocr_records([record for record in raw if not record.get('review_required')])
             candidates = [dict(record, reason='recognition_rejected') for record in raw
                           if record.get('review_required') and not any(
@@ -382,6 +482,16 @@ def extract_selected_pages(
                     }
                 )
             image.close()
+        else:
+            # Explicit visual-transcription preparation: no recognizer import,
+            # no inferred text, and no claim that the ink inventory is complete.
+            page_record.update(recognition_skipped=True, reading_method='visual_required')
+            with Image.open(page_record['render_path']) as loaded:
+                candidates = uncovered_text_candidates(loaded, [])
+            page_record['ocr_review_candidates'] = [
+                {'id': f'p{page_number:02d}-c{i:03d}', 'box': box, 'reason': 'uncovered_ink',
+                 'ocr_attempts': 0, 'review_required': True}
+                for i, box in enumerate(candidates, 1)]
         source_lines.extend(lines)
         page_record["ocr_cache_hit"] = False
         page_record["elapsed_seconds"] = round(time.perf_counter() - page_started, 3)
@@ -397,8 +507,13 @@ def extract_selected_pages(
         "selected_pages": pages,
         "pages": page_records,
         "source_lines": source_lines,
+        "recognition_rotation": recognition_rotation,
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
+    if rec_model:
+        report["recognition_model_override"] = runtime_signature["models"]["Rec"]
+    if not run_ocr:
+        report.update(recognition_skipped=True, reading_method='visual_required')
     (output_path / "extraction-report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -412,7 +527,13 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--dpi", type=int, default=400)
     parser.add_argument("--no-resume", action="store_true", help="Ignore page checkpoints")
+    parser.add_argument("--no-ocr", action="store_true",
+                        help="Render source pages for visual transcription; recognition is skipped and review remains required")
     parser.add_argument("--dual-scale", action="store_true", help="Retry selected uncertain pages at 1x and 3x")
+    parser.add_argument("--rec-model", help="Local ONNX recognition model for the source script")
+    parser.add_argument("--languages", default="", help="Comma-separated source languages for OCR preflight")
+    parser.add_argument("--recognition-rotation", type=int, choices=(0, 90, 180, 270), default=0,
+                        help="Counterclockwise OCR-only rotation verified against the source; output coordinates stay unchanged")
     args = parser.parse_args()
     reader = PdfReader(str(Path(args.source).resolve()))
     pages = (
@@ -421,13 +542,17 @@ def main() -> None:
         else [int(value) for value in args.pages.split(",") if value.strip()]
     )
     report = extract_selected_pages(args.source, pages, args.output, dpi=args.dpi, resume=not args.no_resume,
-                                    ocr_scales=(1.0, 3.0) if args.dual_scale else (1.0,))
+                                    run_ocr=not args.no_ocr, rec_model=args.rec_model,
+                                    source_languages=tuple(code.strip().lower() for code in args.languages.split(",") if code.strip()),
+                                    ocr_scales=(1.0, 3.0) if args.dual_scale else (1.0,),
+                                    recognition_rotation=args.recognition_rotation)
     print(
         json.dumps(
             {
                 "pages": len(report["pages"]),
                 "ocr_lines": len(report["source_lines"]),
                 "output": str(Path(args.output).resolve()),
+                **({'recognition_skipped': True, 'reading_method': 'visual_required'} if args.no_ocr else {}),
             },
             ensure_ascii=False,
         )
