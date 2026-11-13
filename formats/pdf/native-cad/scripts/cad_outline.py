@@ -44,7 +44,7 @@ def segment_intersects(a, b, rect):
 
 def cover_conflicts(page, box, drawings=None):
     rect = pymupdf.Rect(box)
-    if rect.is_empty or not page.rect.contains(rect):
+    if rect.is_empty or not (page.rect * page.derotation_matrix).contains(rect):
         return ['outside_page']
     conflicts = []
     if isinstance(drawings, dict):

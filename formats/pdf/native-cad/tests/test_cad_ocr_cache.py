@@ -9,6 +9,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import cad_outline
 
 
+def test_default_lazy_ocr_uses_shared_bounded_factory_once(monkeypatch):
+    cache = importlib.import_module('cad_cache')
+    sys.path.insert(0, str(cache.SCAN_SCRIPTS))
+    extraction = importlib.import_module('extract_scan')
+    calls = []
+    monkeypatch.setattr(extraction, 'create_ocr_engine',
+                        lambda: calls.append('bounded') or (lambda image: image))
+    engine = cache.LazyOCR()
+    assert engine('first') == 'first'
+    assert engine('second') == 'second'
+    assert calls == ['bounded']
+
+
+def test_ocr_cache_identity_tracks_shared_runtime_factory(tmp_path, monkeypatch):
+    cache = importlib.import_module('cad_cache')
+    runtime = tmp_path / 'extract_scan.py'
+    runtime.write_text('bounded policy v1')
+    monkeypatch.setattr(cache, 'SCAN_SCRIPTS', tmp_path)
+    monkeypatch.setattr(cache, '_model_files', lambda: [])
+    first = cache.ocr_identity()
+    runtime.write_text('bounded policy v2')
+    assert cache.ocr_identity() != first
+
+
 def test_page_identity_is_independent_and_sensitive_to_resources_crop_rotation():
     cache = importlib.import_module('cad_cache')
     with pymupdf.open() as document:

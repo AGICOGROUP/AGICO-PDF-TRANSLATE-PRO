@@ -31,6 +31,29 @@ def test_positioned_word_spaces_and_tight_identifier():
                                      dict(text='1', x0=5.4, x1=10, size=10)]) == 'A1'
 
 
+def test_open_top_continuation_row_keeps_four_columns(tmp_path):
+    pipeline = load('pdf_translation_pipeline')
+    source = tmp_path / 'continuation.pdf'
+    pdf = canvas.Canvas(str(source), pagesize=(600, 800))
+    for x in (25, 65, 420, 515, 575):
+        pdf.line(x, 500, x, 660)
+    pdf.line(25, 500, 575, 500)  # Deliberately no top border on the continued row.
+    pdf.setFont('Helvetica', 10)
+    for x, text in [(30, '3'), (70, 'Castrol Arctic Grease'),
+                    (435, '11/17/2026'), (530, '2.00 kg')]:
+        pdf.drawString(x, 645, text)
+    pdf.drawString(70, 627, 'Application: Bearing pump')
+    pdf.save()
+    manifest = tmp_path / 'manifest.json'
+    pipeline.extract_command(argparse.Namespace(input=source, manifest=manifest,
+                                                source_language='en', target_language='zh'))
+    blocks = json.loads(manifest.read_text(encoding='utf-8'))['pages'][0]['blocks']
+    assert len(blocks) == 4
+    assert {b['source_text'] for b in blocks} == {
+        '3', 'Castrol Arctic Grease\nApplication:Bearing pump', '11/17/2026', '2.00 kg'}
+    assert all('source_cell_bbox' in b for b in blocks)
+
+
 def test_extract_cells_before_translation_and_wrap_without_line_binding(tmp_path):
     pipeline = load('pdf_translation_pipeline')
     rebuild = load('native_selectable_rebuild')

@@ -10,11 +10,18 @@ from the root skill. The source container and visible content choose the adapter
 the filename and a copyable hidden OCR layer do not.
 
 ```powershell
-python formats/pdf/scripts/route_pdf_file.py <original.pdf> --mode replace --output <job>/route-report.json
+python formats/pdf/scripts/route_pdf_file.py <original.pdf> --mode replace --output <job>/route-report.json --normalize-rotation-output <job>/normalized-source.pdf
 ```
 
 Use the returned adapter and translation mode. Nonzero exits include an actionable
 error; resolve that cause instead of silently selecting a different adapter.
+A rotated scan is a recoverable preparation step, not an untranslatable attachment.
+With the new working-copy path above, routing normalizes only affected scans,
+preserves original visible content and vectors, and reroutes automatically. When
+`normalized_source` is returned, use that file for extraction/build and retain the
+original/working-copy hashes and page mapping. A pre-existing working-copy path
+is rejected; use a fresh job for tests. Without this option, resolve the reported
+rotation step and continue rather than ending the task at route exit 2.
 A scan with non-painting text (`Tr=3` or `Tr=7`) remains scan-only. Native text plus
 hidden OCR counts only the visible text. The optional fast backend still inspects
 every page and retains the pypdf malformed/encrypted-file checks.

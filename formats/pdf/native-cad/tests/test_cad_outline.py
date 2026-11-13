@@ -39,6 +39,16 @@ def test_cover_blocks_crossing_pipe_and_contained_symbol():
         assert not cover_conflicts(page, [40, 140, 80, 160])
 
 
+def test_rotated_cover_uses_unrotated_source_coordinates():
+    from cad_outline import cover_conflicts
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=300, height=500)
+        page.set_rotation(270)
+        # Valid source ink below y=300 is outside the rotated display rectangle.
+        assert not cover_conflicts(page, [40, 400, 80, 420])
+        assert cover_conflicts(page, [310, 400, 330, 420]) == ['outside_page']
+
+
 def test_enclosing_frame_does_not_block_empty_interior():
     from cad_outline import cover_conflicts
     with pymupdf.open() as doc:

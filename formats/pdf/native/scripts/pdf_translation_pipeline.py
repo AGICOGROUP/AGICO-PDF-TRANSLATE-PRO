@@ -586,6 +586,45 @@ def page_table_cells(page: Any) -> list[dict[str, Any]]:
                     "bbox": [round(float(value), 3) for value in cell],
                 }
             )
+    if cells:
+        return cells
+    # A continued table can deliberately omit its top rule. pdfplumber then
+    # finds no closed cells and ordinary line extraction merges its columns.
+    # Infer only a single open-top row supported by aligned vertical sides,
+    # bottom rules and actual text in at least three distinct columns.
+    groups: list[list[Any]] = []
+    for edge in page.edges:
+        if edge.get('orientation') != 'v' or edge['bottom'] - edge['top'] < 20:
+            continue
+        group = next((g for g in groups if abs(g[0]['top'] - edge['top']) < 1.5
+                      and abs(g[0]['bottom'] - edge['bottom']) < 1.5), None)
+        if group is None:
+            groups.append([edge])
+        else:
+            group.append(edge)
+    for group in groups:
+        xs = []
+        for x in sorted(float(e['x0']) for e in group):
+            if not xs or x - xs[-1] > 1.5:
+                xs.append(x)
+        top = min(e['top'] for e in group)
+        bottom = max(e['bottom'] for e in group)
+        if len(xs) < 4 or xs[-1] - xs[0] < page.width * .3:
+            continue
+        horizontal = [e for e in page.edges if e.get('orientation') == 'h'
+                      and abs(e['top'] - bottom) < 1.5]
+        if not all(any(e['x0'] <= left + 1.5 and e['x1'] >= right - 1.5
+                       for e in horizontal) for left, right in zip(xs, xs[1:])):
+            continue
+        occupied = sum(any(left < (c['x0'] + c['x1']) / 2 < right
+                           and top <= c['top'] < bottom and str(c.get('text', '')).strip()
+                           for c in page.chars) for left, right in zip(xs, xs[1:]))
+        if occupied < 3:
+            continue
+        table_index = len(groups) + len(cells)
+        for index, (left, right) in enumerate(zip(xs, xs[1:])):
+            cells.append({'table_index': table_index, 'cell_index': index,
+                          'bbox': [round(left, 3), round(top, 3), round(right, 3), round(bottom, 3)]})
     return cells
 
 

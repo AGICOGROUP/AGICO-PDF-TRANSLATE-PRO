@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import contextmanager
 import json
 import os
@@ -306,7 +307,10 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
                 except Exception:
                     trace_page = None
                 counts.append(native_char_count(page, trace_page=trace_page))
-                page_sizes.append((float(page.mediabox.width), float(page.mediabox.height)))
+                width, height = float(page.mediabox.width), float(page.mediabox.height)
+                if int(page.rotation or 0) % 180:
+                    width, height = height, width
+                page_sizes.append((width, height))
                 if int(page.rotation or 0) % 360:
                     rotated.append(page_number)
             titleblocks, border_grids = visible_titleblock_pages(document, page_sizes, counts)
@@ -405,12 +409,49 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
     )
 
 
+def route_with_normalization(source: Path, mode: str, normalized_output: Path | None = None):
+    code, result = route(source, mode)
+    if normalized_output is None or not (code == 2 and result.get('rotated_pages')
+            and result.get('error') == 'normalize rotated scan pages before translation routing'):
+        return code, result
+    if normalized_output.resolve() == source.resolve() or normalized_output.exists():
+        return 2, {**result, 'error': 'normalized output must be a new path distinct from the original PDF'}
+    temporary = None
+    try:
+        import pymupdf
+        normalized_output.parent.mkdir(parents=True, exist_ok=True)
+        with pymupdf.open(source) as document:
+            for page in document:
+                if page.rotation:
+                    page.remove_rotation()
+            with tempfile.NamedTemporaryFile(dir=normalized_output.parent, suffix='.pdf', delete=False) as stream:
+                temporary = Path(stream.name)
+            document.save(temporary, garbage=3, deflate=True)
+        normalized_code, normalized_report = route(temporary, mode)
+        if normalized_code:
+            return normalized_code, normalized_report
+        os.replace(temporary, normalized_output)
+        normalized_report.update(normalized_source=str(normalized_output.resolve()),
+                                 original_source=str(source.resolve()),
+                                 original_source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+                                 normalized_source_sha256=hashlib.sha256(normalized_output.read_bytes()).hexdigest(),
+                                 normalized_rotation_pages=result['rotated_pages'])
+        return 0, normalized_report
+    except (ImportError, OSError, ValueError, RuntimeError) as exc:
+        return 2, {**result, 'error': f'cannot normalize rotated working copy: {exc}'}
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, help="atomically save the UTF-8 JSON report")
+    parser.add_argument('--normalize-rotation-output', type=Path,
+                        help='For rotated scan pages, preserve the original and reroute a new zero-rotation working PDF')
     parser.add_argument(
         "--mode",
         choices=("auto", "replace", "bilingual"),
@@ -420,7 +461,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.output is not None and args.output.resolve() == args.source.resolve():
         parser.error("--output must differ from the source PDF")
-    exit_code, result = route(args.source, mode=args.mode)
+    if args.output is not None and args.normalize_rotation_output is not None and args.output.resolve() == args.normalize_rotation_output.resolve():
+        parser.error('--output and --normalize-rotation-output must differ')
+    exit_code, result = route_with_normalization(args.source, args.mode, args.normalize_rotation_output)
     serialized = json.dumps(result, ensure_ascii=False)
     print(serialized)
     if args.output is not None:

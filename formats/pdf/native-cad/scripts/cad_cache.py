@@ -3,9 +3,21 @@ from functools import lru_cache
 import hashlib
 from importlib import metadata, util
 import json
+import sys
 from pathlib import Path
 
 import pymupdf
+
+SCAN_SCRIPTS = Path(__file__).resolve().parents[2] / 'scan' / 'scripts'
+
+
+def create_default_ocr():
+    # Reuse the existing bounded ONNX factory; RapidOCR thread kwargs are
+    # silently ignored by some versions. Do not create a second runtime policy.
+    if str(SCAN_SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCAN_SCRIPTS))
+    from extract_scan import create_ocr_engine
+    return create_ocr_engine()
 
 
 def page_fingerprint(page):
@@ -63,8 +75,9 @@ def ocr_identity():
             dependencies[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
             dependencies[name] = 'not-installed'
-    identity = {'version': 2, 'dependencies': dependencies,
+    identity = {'version': 3, 'dependencies': dependencies,
                 'implementation': _identity_file(Path(__file__)),
+                'runtime_factory': _identity_file(SCAN_SCRIPTS / 'extract_scan.py'),
                 'models': [(str(path), _identity_file(path)) for path in _model_files()]}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
@@ -80,7 +93,6 @@ class LazyOCR:
         if self._engine is None:
             factory = self._factory
             if factory is None:
-                from rapidocr_onnxruntime import RapidOCR
-                factory = RapidOCR
+                factory = create_default_ocr
             self._engine = factory()
         return self._engine(image)
