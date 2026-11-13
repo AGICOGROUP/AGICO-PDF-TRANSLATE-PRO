@@ -1,4 +1,5 @@
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -35,3 +36,10 @@ def test_only_final_unmasked_opaque_whole_page_image_hides_native(tmp_path,mode,
     result=subprocess.run([sys.executable,str(ROUTER),str(p),'--mode','replace'],capture_output=True,text=True,encoding='utf-8')
     assert result.returncode==0,result.stderr
     assert json.loads(result.stdout)['pdf_type']==want
+    script = ROUTER.parents[1] / 'scan/scripts/classify_pdf.py'
+    spec = importlib.util.spec_from_file_location('opaque_scan_classifier', script)
+    classifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(classifier)
+    assert classifier.classify(p)['route'] == (
+        'scan-only' if want == 'scan-only' else 'mixed-or-native'
+    )

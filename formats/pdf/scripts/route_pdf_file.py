@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from contextlib import contextmanager
 import json
 import os
 import re
@@ -17,7 +16,7 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from pdf_text_visibility import native_char_count
+from pdf_text_visibility import native_char_count, text_probe_document
 
 
 PDF_SIGNATURE = b"%PDF-"
@@ -88,25 +87,6 @@ def sparse_landscape_pages(
     ]
 
 
-@contextmanager
-def text_probe_document(source: Path, page_count: int):
-    """Open the optional fast backend once; pypdf remains the reading gate."""
-    document = None
-    try:
-        import pymupdf
-        document = pymupdf.open(source)
-        if document.is_repaired or document.page_count != page_count:
-            document.close()
-            document = None
-    except Exception:
-        if document is not None:
-            document.close()
-        document = None
-    try:
-        yield document
-    finally:
-        if document is not None:
-            document.close()
 
 
 def painted_path_counts(

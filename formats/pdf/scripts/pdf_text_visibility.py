@@ -1,5 +1,6 @@
 """Exclude non-painting OCR layers from PDF content routing (no OCR needed)."""
 from copy import copy
+from contextlib import contextmanager
 
 from pypdf.generic import ContentStream, DictionaryObject, NameObject
 
@@ -135,3 +136,24 @@ def native_char_count(page, *, trace_page=None):
     # native page merely because its trace returned no Unicode glyphs.
     decode_text = True
     return count_stream(page.get_contents(), page.get('/Resources', {}))
+
+
+@contextmanager
+def text_probe_document(source, page_count: int):
+    """Open the optional fast backend once; pypdf remains the reading gate."""
+    document = None
+    try:
+        import pymupdf
+        document = pymupdf.open(source)
+        if document.is_repaired or document.page_count != page_count:
+            document.close()
+            document = None
+    except Exception:
+        if document is not None:
+            document.close()
+        document = None
+    try:
+        yield document
+    finally:
+        if document is not None:
+            document.close()

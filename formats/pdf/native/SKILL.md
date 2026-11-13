@@ -84,20 +84,38 @@ Only minor local fitting may shrink an overflowing paragraph/cell uniformly.
 
 ## Text inside images
 
-Inspect every original image XObject, including logos/photos/diagrams, and decide
-whether it has translatable text. Read [image routing](references/image-localization-routing.md)
-and [vector overlay](references/image-vector-overlay.md) only for affected images.
-Use original XObjects, tight per-line cleanup and protected boxes; place selectable
-target text separately. A text-band solid fill requires observed text-only space,
-not a whole-cell erasure across signatures, rules or symbols. Mixed raster pages
-stay in this job and need complete source-label ownership too.
+Inspect every original image XObject and record its content kind from source
+pixels. Flowcharts, diagrams, screenshots, UI captures, scanned documents and
+rendered technical figures normally require translation of all readable
+informational text. They cannot be skipped as photographs merely because they
+are raster assets. A real site/building/scene/people photograph may remain
+unchanged under the user's photo-skip policy. Translate any separate diagram,
+screenshot or caption overlaid on a photo as its own located content.
+
+Read [image routing](references/image-localization-routing.md) and
+[vector overlay](references/image-vector-overlay.md) for affected assets.
+For zero-label/no-text records, the runner requires
+`source_review_complete: true` and a specific `source_review_reason`.
+To skip an actual photograph even when scene text exists, use
+`content_kind: site_photo|building_photo|scene_photo|people_photo`,
+`method: preserve_photo`, `original_asset_preserved: true`, zero label counts
+and the same source-review evidence. Do not put a photograph in cleanup metadata.
+
+For a complex non-photographic background, invoke an available image editing
+tool on the original asset when deterministic cleanup cannot preserve structure.
+First check that the tool is actually callable. A prompt or method name alone
+is not an executed edit. Feed its saved candidate to the constrained clean-base
+contract in the image routing reference. Keep original pixels outside approved
+regions and protected structures; reject mismatched dimensions or stale hashes.
+A failed tool call needs a disclosed capability result or a verified deterministic
+repair. It does not authorize silently skipping clear source text.
 
 For nonempty inventories follow runner `annotate-images`, `build-images`,
-`assemble`; review entries must
-cover every inventory image, including a true no-text finding. For local image
-corrections use `annotate-images ... --revise` instead of restarting extraction.
-Unchanged English prose is not completed Chinese output; omitted material cannot
-be relabeled `ocr-artifact` or replaced with dots.
+`assemble`. Review every original image, including genuine no-text assets.
+Use original XObjects, tight per-line cleanup and protected boxes; place selectable
+target text separately. Mixed raster pages remain in this job. For same-job image
+repairs use `annotate-images ... --revise`, preserving valid upstream work.
+Unchanged source prose is incomplete target output.
 
 ## Review and deliver
 

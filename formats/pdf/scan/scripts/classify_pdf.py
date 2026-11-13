@@ -8,13 +8,15 @@ import sys
 from pypdf import PdfReader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from pdf_text_visibility import native_char_count
+from pdf_text_visibility import native_char_count, text_probe_document
 
 
 def classify(path: str | Path, native_char_threshold: int = 1) -> dict:
     source = Path(path).resolve()
     reader = PdfReader(str(source))
-    chars_by_page = [native_char_count(page) for page in reader.pages]
+    with text_probe_document(source, len(reader.pages)) as document:
+        chars_by_page = [native_char_count(page, trace_page=document[index] if document is not None else None)
+                         for index, page in enumerate(reader.pages)]
     native_pages = [index + 1 for index, count in enumerate(chars_by_page) if count >= native_char_threshold]
     rotated_pages = [
         index + 1

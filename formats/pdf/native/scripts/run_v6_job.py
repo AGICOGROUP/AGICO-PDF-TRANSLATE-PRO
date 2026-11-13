@@ -19,7 +19,7 @@ from pypdf import PdfReader
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / 'scripts'))
-from pdf_text_visibility import native_char_count
+from pdf_text_visibility import native_char_count, text_probe_document
 IMAGE_LOCALIZATION_METHODS = {
     "native_edit",
     "deterministic_cleanup",
@@ -90,7 +90,11 @@ def init_job(
     target_language: str = "en",
     *, fresh: bool = False,
 ) -> Path:
-    if not any(native_char_count(page) for page in PdfReader(source).pages):
+    reader = PdfReader(source)
+    with text_probe_document(source, len(reader.pages)) as document:
+        has_native = any(native_char_count(page, trace_page=document[index] if document is not None else None)
+                         for index, page in enumerate(reader.pages))
+    if not has_native:
         raise ValueError('scan-only PDF (possibly hidden OCR); use PDF-TRANSLATE-PRO-SCAN')
     request = {'source_language': _language_identity(source_language),
                'target_language': _language_identity(target_language),
@@ -204,9 +208,19 @@ def _validate_image_localization_review(
         translated = int(record.get("translated_label_count", -1))
         preserved = int(record.get("preserved_label_count", -1))
         confirms = int(record.get("confirm_count", -1))
-        if expected == 0 and not record.get("contains_source_text", False):
+        photographic = record.get("content_kind") in {
+            "site_photo", "building_photo", "scene_photo", "people_photo"
+        }
+        if expected == 0 and (not record.get("contains_source_text", False)
+                              or record.get("method") == "preserve_photo"):
             if labels or any(value != 0 for value in (translated, preserved, confirms)):
                 raise ValueError(f"image label coverage mismatch: {image_id}")
+            if (record.get("source_review_complete") is not True
+                    or not str(record.get("source_review_reason", "")).strip()):
+                raise ValueError(f"source image review required before skipping text: {image_id}")
+            if record.get("method") == "preserve_photo" and (
+                    not photographic or record.get("original_asset_preserved") is not True):
+                raise ValueError(f"photo preservation requires a reviewed original photograph: {image_id}")
             continue
         method = str(record.get("method", ""))
         if method not in IMAGE_LOCALIZATION_METHODS:
@@ -274,6 +288,12 @@ def _validate_image_localization_review(
             raise ValueError(f"structural image review incomplete: {image_id}")
         if translated and image_id not in metadata_ids:
             raise ValueError(f"missing vector metadata for translated image: {image_id}")
+        if method == "constrained_clean_base" and translated:
+            item = metadata_ids[image_id]
+            if (item.get("method") != "constrained_clean_base"
+                    or not str(item.get("clean_base_candidate", "")).strip()
+                    or item.get("image_edit_evidence", {}).get("tool") != "image_gen"):
+                raise ValueError(f"missing executed image-edit candidate metadata: {image_id}")
 
 
 def _empty_image_inventory(job_dir: Path, job: dict) -> bool:

@@ -77,6 +77,21 @@ Use this review shape:
 }
 ```
 
+## Content decision before method selection
+
+Identify flowcharts, diagrams, screenshots, UI captures, scanned pages and
+rendered technical figures by their actual content. Raster encoding does not
+make them photographs. Translate their clear informational text. Actual
+site/building/scene/people photographs may be kept when the user allows photo
+skipping. The runner's `preserve_photo` review uses the content kind, explicit
+source review, a reason, original-asset preservation and zero label counts.
+A screenshot of a flowchart remains a flowchart. Translate separate captions
+and schematic overlays even when a photograph is used underneath.
+
+Every zero-label/no-text finding requires `source_review_complete: true` and
+`source_review_reason` with the actual observation. Counts alone provide no
+evidence that the source image was inspected.
+
 ## Method router
 
 Choose the first method whose predicate is satisfied. Fail closed when its
@@ -121,6 +136,38 @@ Fail-closed rule: Route B never replaces a dimensioned or legally significant
 region that Route A can clean, and it may not be chosen merely because manual
 box measurement is tedious. Record the chosen route and the reason on the image
 record.
+
+## Bind an actual image-edit result
+
+For Route B, check availability and invoke the image editing tool on the
+original asset. Save its returned clean-base candidate. This script consumes
+an existing edit; it does not invoke a model. In the image metadata record use:
+
+```json
+{
+  "id": "diagram",
+  "source": "original.png",
+  "output": "clean.png",
+  "method": "constrained_clean_base",
+  "clean_base_candidate": "edited.png",
+  "image_edit_evidence": {
+    "tool": "image_gen",
+    "source_sha256": "<file SHA256 of original.png>",
+    "candidate_sha256": "<file SHA256 of edited.png>",
+    "structural_review_complete": true
+  },
+  "regions": [{"box": [100, 100, 300, 160]}],
+  "protected_boxes": []
+}
+```
+
+Review the tool result before setting the structural flag. The builder checks
+file hashes and native dimensions, composites only approved region pixels,
+then restores declared protected pixels from the source. Its existing pixel
+metrics still apply. The vector overlay uses the same region boxes and targets.
+A whole-image edit never authorizes whole-image replacement outside those masks.
+This binding verifies the supplied artifact, not the truth of a claimed tool
+invocation; retain the actual tool result in the job evidence.
 
 ## Label location without OCR
 

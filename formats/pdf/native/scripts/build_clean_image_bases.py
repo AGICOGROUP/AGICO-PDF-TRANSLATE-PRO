@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 from collections import deque
 from pathlib import Path
@@ -47,14 +48,12 @@ def boundary_connected(mask: np.ndarray) -> np.ndarray:
 def horizontal_runs(mask: np.ndarray, minimum_length: int) -> np.ndarray:
     protected = np.zeros_like(mask)
     for y, row in enumerate(mask):
-        start = None
-        for x, value in enumerate(np.append(row, False)):
-            if value and start is None:
-                start = x
-            elif not value and start is not None:
-                if x - start >= minimum_length:
-                    protected[y, start:x] = True
-                start = None
+        edges = np.diff(np.pad(np.asarray(row, dtype=np.int8), (1, 1)))
+        starts = np.flatnonzero(edges == 1)
+        ends = np.flatnonzero(edges == -1)
+        for start, end in zip(starts, ends):
+            if end - start >= minimum_length:
+                protected[y, start:end] = True
     return protected
 
 
@@ -330,18 +329,37 @@ def build(metadata_path: Path) -> dict:
         for region in item['regions']:
             x0, y0, x1, y1 = region.get('clean_box', region['box'])
             allowed[y0:y1, x0:x1] = True
-        changed_by_region = [clean_region(cleaned, region) for region in item["regions"]]
+        if item.get("method") == "constrained_clean_base":
+            evidence = item.get("image_edit_evidence", {})
+            candidate_path = resolve(base, item["clean_base_candidate"])
+            if (evidence.get("tool") != "image_gen"
+                    or evidence.get("source_sha256") != hashlib.sha256(source_path.read_bytes()).hexdigest()
+                    or evidence.get("candidate_sha256") != hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+                    or evidence.get("structural_review_complete") is not True):
+                raise ValueError("constrained clean base requires bound image-edit and structural review evidence")
+            with Image.open(candidate_path) as candidate:
+                if candidate.size != (source.shape[1], source.shape[0]):
+                    raise ValueError("edited clean base dimensions differ from the original image")
+                candidate_pixels = np.asarray(candidate.convert("RGB"))
+                cleaned[allowed] = candidate_pixels[allowed]
+            changed_by_region = [
+                int(np.any(source[y0:y1, x0:x1] != cleaned[y0:y1, x0:x1], axis=2).sum())
+                for x0, y0, x1, y1 in
+                (region.get("clean_box", region["box"]) for region in item["regions"])
+            ]
+        else:
+            changed_by_region = [clean_region(cleaned, region) for region in item["regions"]]
         cleaned[protected] = source[protected]
         changed = np.any(source != cleaned, axis=2)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(cleaned, "RGB").save(output_path, format="PNG")
+        Image.fromarray(cleaned, "RGB").save(output_path, format="PNG", compress_level=3)
         report["images"].append(
             {
                 "id": item["id"],
                 "source": str(source_path),
                 "output": str(output_path),
                 "size": [source.shape[1], source.shape[0]],
-                "changed_pixels": int(np.any(source != cleaned, axis=2).sum()),
+                "changed_pixels": int(changed.sum()),
                 "outside_region_pixel_changes": int((changed & ~allowed).sum()),
                 "protected_pixel_changes": int((changed & protected).sum()),
                 "protected_pixel_count": int(protected.sum()),

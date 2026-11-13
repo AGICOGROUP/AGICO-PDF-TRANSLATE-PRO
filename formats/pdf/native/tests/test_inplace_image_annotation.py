@@ -11,6 +11,7 @@ def test_canonical_annotation_inputs_do_not_copy_onto_themselves(tmp_path, compl
     metadata.write_text(json.dumps({'images': []}), encoding='utf-8')
     payload = {'complete': complete, 'reviewed_image_ids': [image_id], 'images': [{
         'id': image_id, 'contains_source_text': False, 'expected_label_count': 0,
+        'source_review_complete': True, 'source_review_reason': 'Reviewed the original solid-color fixture; no text.',
         'translated_label_count': 0, 'preserved_label_count': 0,
         'confirm_count': 0, 'labels': []}]}
     review.write_text(json.dumps(payload), encoding='utf-8')
