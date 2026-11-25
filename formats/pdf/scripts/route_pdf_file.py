@@ -294,6 +294,17 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
                 if int(page.rotation or 0) % 360:
                     rotated.append(page_number)
             titleblocks, border_grids = visible_titleblock_pages(document, page_sizes, counts)
+            # Portrait CAD exports can contain landscape artwork drawn sideways,
+            # with text converted to vector outlines and no PDF rotation flag.
+            large_portrait_vectors = set()
+            if document is not None:
+                for index, (width, height) in enumerate(page_sizes, 1):
+                    trace_page = document[index - 1]
+                    if (height > width >= 1000 and width * height >= 1_400_000
+                            and counts[index - 1] <= 3000
+                            and not trace_page.get_image_info()
+                            and len(trace_page.get_drawings()) >= 5000):
+                        large_portrait_vectors.add(index)
             path_counts = painted_path_counts(
                 source, list(set(sparse_landscape_pages(page_sizes, counts)) | set(titleblocks) | set(border_grids)),
                 document=document)
@@ -311,7 +322,22 @@ def route(source: Path, mode: str = "auto") -> tuple[int, dict[str, object]]:
         titleblocks,
         border_grids,
     )
+    if large_portrait_vectors and len(large_portrait_vectors) == page_count:
+        document_kind = "engineering-drawing"
+        drawing_evidence = drawing_evidence + ["vector_dense_portrait_sheet"]
     drawing = document_kind == "engineering-drawing"
+    if native_text_pages == 0 and large_portrait_vectors and drawing:
+        return 0, report(
+            pdf_type="vector-outline",
+            adapter=BILINGUAL_ADAPTER if mode in {"auto", "bilingual"} else NATIVE_CAD_ADAPTER,
+            page_count=page_count,
+            native_char_counts=counts,
+            rotated_pages=rotated,
+            document_kind=document_kind,
+            translation_mode="add_bilingual" if mode in {"auto", "bilingual"} else "replace",
+            next_action="inspect_bilingual_coverage" if mode in {"auto", "bilingual"} else "translate",
+            drawing_evidence=drawing_evidence,
+        )
     if native_text_pages == 0:
         translation_mode = (
             "add_bilingual" if mode == "bilingual" or (drawing and mode == "auto")
